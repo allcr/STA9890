@@ -1,0 +1,26 @@
+[project]
+name = "sta9890"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "black>=26.3.1",
+    "optuna>=4.8.0",
+    "optuna-dashboard>=0.20.0",
+    "optuna-integration[xgboost]>=4.8.0",
+    "polars[all]>=1.39.0",
+    "ruff>=0.15.6",
+    "scikit-learn>=1.8.0",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+    "xgboost>=3.2.0",
+]
+
+[tool.uv.sources]
+torch = { index = "torch_index" }
+torchvision = { index = "torch_index" }
+
+[[tool.uv.index]]
+name = "torch_index"
+url = "https://download.pytorch.org/whl/rocm7.1"
