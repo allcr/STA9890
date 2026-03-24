@@ -1,0 +1,17 @@
+#+title: Prediction Competition
+#+author: Craig Allen
+
+* Abstract
+* Methods
+** Common Feature Engineering
+** TPOT
+Abandoned due to time constraints.
+** XGBoost + Optuna
+** Tabnet
+** BART
+** Bayesian Hierachical Modeling
+** Ridge Regression
+** Neural Networks
+
+* Results
+
