@@ -62,14 +62,9 @@ def objective(trial):
     trial.set_user_attr("train-rmse-mean", cv_results["train-rmse-mean"].min())
     return cv_results["test-rmse-mean"].min()
 
-    #        "ATTENDANCE_RATE": 1,
-    #       "rough_total_funding_per_student": 1,
-    #       "PERCENT_HOMELESS": -1,
-
 
 def objective_round2(trial):
     params = {
-        # Fixed from round 1
         "min_child_weight": best_params_round_1["min_child_weight"],
         "gamma": best_params_round_1["gamma"],
         "subsample": best_params_round_1["subsample"],
@@ -82,7 +77,6 @@ def objective_round2(trial):
         "grow_policy": best_params_round_1["grow_policy"],
         "objective": "reg:squarederror",
         "eval_metric": "rmse",
-        # Tuning these three
         "eta": trial.suggest_float("eta", 0.005, 0.3, log=True),
         "max_depth": trial.suggest_int("max_depth", 3, 12),
         "monotone_constraints": {"ATTENDANCE_RATE": 1},
