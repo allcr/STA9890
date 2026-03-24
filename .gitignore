@@ -13,3 +13,4 @@ wheels/
 
 #Other
 optuna.db
+*.db
