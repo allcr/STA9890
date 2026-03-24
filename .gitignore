@@ -9,3 +9,7 @@ wheels/
 # Virtual environments
 .venv
 /.idea/
+.Rproj.user
+
+#Other
+optuna.db
