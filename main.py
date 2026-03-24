@@ -4,6 +4,7 @@ import xgboost
 import random
 import optuna
 from optuna.samplers import TPESampler
+import json
 
 # TODO SCHOOL, DISTRICT,COUNTY, REGION Funding SPLIT BY LOCAL AND FEDERAL
 # TODO Multiple high needs schools per district?
@@ -26,12 +27,14 @@ sqldb = "sqlite:///optuna.db"
 
 def objective(trial):
     params = {
-        "eta": 0.03,
-        "max_depth": trial.suggest_int("max_depth", 5, 15),
+        "eta": 0.1,
+        "max_depth": 5,
         "min_child_weight": trial.suggest_float("min_child_weight", 0, 20),
         "gamma": trial.suggest_float("gamma", 5e-5, 10),
         "max_leaves": 0,
-        "grow_policy": "lossguide",
+        "grow_policy": trial.suggest_categorical(
+            "grow_policy", ["lossguide", "depthwise"]
+        ),
         "subsample": trial.suggest_float("subsample", 0.8, 1.0),
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.8, 1.0),
         "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.8, 1.0),
@@ -40,6 +43,7 @@ def objective(trial):
         "lambda": trial.suggest_float("lambda", 0, 100),
         "objective": "reg:squarederror",
         "eval_metric": "rmse",
+        "monotone_constraints": {"ATTENDANCE_RATE": 1},
     }
 
     pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "test-rmse")
@@ -47,7 +51,7 @@ def objective(trial):
         params,
         dtrain,
         nfold=5,
-        num_boost_round=500,
+        num_boost_round=100,
         early_stopping_rounds=10,
         verbose_eval=True,
         metrics="rmse",
@@ -61,6 +65,42 @@ def objective(trial):
     #        "ATTENDANCE_RATE": 1,
     #       "rough_total_funding_per_student": 1,
     #       "PERCENT_HOMELESS": -1,
+
+
+def objective_round2(trial):
+    params = {
+        # Fixed from round 1
+        "min_child_weight": best_params_round_1["min_child_weight"],
+        "gamma": best_params_round_1["gamma"],
+        "subsample": best_params_round_1["subsample"],
+        "colsample_bytree": best_params_round_1["colsample_bytree"],
+        "colsample_bylevel": best_params_round_1["colsample_bylevel"],
+        "colsample_bynode": best_params_round_1["colsample_bynode"],
+        "alpha": best_params_round_1["alpha"],
+        "lambda": best_params_round_1["lambda"],
+        "max_leaves": 0,
+        "grow_policy": best_params_round_1["grow_policy"],
+        "objective": "reg:squarederror",
+        "eval_metric": "rmse",
+        # Tuning these three
+        "eta": trial.suggest_float("eta", 0.005, 0.3, log=True),
+        "max_depth": trial.suggest_int("max_depth", 3, 12),
+        "monotone_constraints": {"ATTENDANCE_RATE": 1},
+    }
+
+    pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "test-rmse")
+    cv_results = xgboost.cv(
+        params,
+        dtrain,
+        nfold=5,
+        num_boost_round=5000,
+        early_stopping_rounds=20,
+        metrics="rmse",
+        callbacks=[pruning_callback],
+    )
+    trial.set_user_attr("actual_num_rounds", cv_results.shape[0])
+    trial.set_user_attr("train-rmse-mean", cv_results["train-rmse-mean"].min())
+    return cv_results["test-rmse-mean"].min()
 
 
 train = pl.read_csv(
@@ -309,4 +349,34 @@ study = optuna.create_study(
 
 study.optimize(objective, n_trials=3000, show_progress_bar=True, gc_after_trial=True)
 best_params_round_1 = study.best_params
-print(f"{best_params_round_1}")
+
+study_2 = optuna.create_study(
+    study_name=study_name + "_round_2",
+    direction="minimize",
+    storage=sqldb,
+    load_if_exists=True,
+    sampler=sampler,
+    pruner=pruner,
+)
+study_2.optimize(
+    objective_round2, n_trials=200, show_progress_bar=True, gc_after_trial=True
+)
+best_params = {**best_params_round_1, **study_2.best_params}
+
+with open("best_params.json", "w") as f:
+    json.dump(best_params, f, indent=4)
+
+model = xgboost.XGBRegressor(
+    **best_params,
+    eval_metric="rmse",
+    n_estimators=15000,
+    early_stopping_rounds=100,
+    enable_categorical=True,
+    monotone_constraints={"ATTENDANCE_RATE": 1},
+)
+model.fit(X_train_pd, y_train_np, eval_set=[(X_train_pd, y_train_np)])
+y_pred = model.predict(X_pred_pd)
+
+submission = X_pred_id.with_columns(pl.Series("PERCENT_PROFICIENT", y_pred))
+
+submission.write_csv("submission_xgboost.csv")
