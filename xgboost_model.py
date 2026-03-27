@@ -8,16 +8,6 @@ from optuna.samplers import TPESampler
 import json
 from data_processing import get_data
 
-# TODO Multiple high needs schools per district?
-# TODO APPROXIMATE POOR GDP IN district/COUNTY/region WITH High needs and other vars
-# maybe use min max local funding?
-# TODO I WILL HAVE TO NORMALIZE MY DATA A BIT, A FEW DIFFERENT SCALES
-# TODO TABNET
-# TODO  see what i can do with onehot/other methods
-# TODO CNN + Ensemble learning after speaking with BOB
-# TODO BART this could be fun
-# TODO Vanilla Ridge Regression + Lasso + Elastic Net with categorical features?
-# TODO Brms multilevel hierarchical modelling of school performance
 pl.Config(set_tbl_cols=10000, set_fmt_str_lengths=1000, set_tbl_width_chars=10000)
 pl.enable_string_cache()
 random.seed(8675309)
