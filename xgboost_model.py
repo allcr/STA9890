@@ -18,9 +18,8 @@ sqldb = "sqlite:///optuna.db"
 
 def objective(trial):
     params = {
-        "nthread": 10,
         "eta": trial.suggest_float("eta", 0.01, 0.4),
-        "max_depth": trial.suggest_int("max_depth", 3, 13),
+        "max_depth": trial.suggest_int("max_depth", 3, 11),
         "min_child_weight": trial.suggest_float("min_child_weight", 0.5, 20),
         "gamma": trial.suggest_float("gamma", 1, 20),
         "max_leaves": 0,
@@ -37,6 +36,7 @@ def objective(trial):
         "eval_metric": "rmse",
         "monotone_constraints": {"ATTENDANCE_RATE": 1},
     }
+    early_stop = xgboost.callback.EarlyStopping(rounds=10, min_delta=0.01)
 
     pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "test-rmse")
     cv_results = xgboost.cv(
@@ -44,10 +44,9 @@ def objective(trial):
         dtrain,
         nfold=10,
         num_boost_round=1000,
-        early_stopping_rounds=10,
         verbose_eval=False,
         metrics="rmse",
-        callbacks=[pruning_callback],
+        callbacks=[pruning_callback, early_stop],
     )
 
     trial.set_user_attr("actual_num_rounds", cv_results.shape[0] + 1)
@@ -106,7 +105,6 @@ model = xgboost.XGBRegressor(
     **best_params,
     eval_metric="rmse",
     n_estimators=1000,
-    n_jobs=10,
     early_stopping_rounds=10,
     enable_categorical=True,
     monotone_constraints={"ATTENDANCE_RATE": 1},
