@@ -14,3 +14,7 @@ wheels/
 #Other
 optuna.db
 *.db
+*.rds
+*.json
+*.csv
+project.org
