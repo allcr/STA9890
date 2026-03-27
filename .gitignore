@@ -17,4 +17,6 @@ optuna.db
 *.rds
 *.json
 *.csv
-project.org
+*.org
+*.log
+*.txt
