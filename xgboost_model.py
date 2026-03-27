@@ -28,6 +28,7 @@ sqldb = "sqlite:///optuna.db"
 
 def objective(trial):
     params = {
+        "nthread": 10,
         "eta": trial.suggest_float("eta", 0.01, 0.4),
         "max_depth": trial.suggest_int("max_depth", 3, 13),
         "min_child_weight": trial.suggest_float("min_child_weight", 0.5, 20),
@@ -36,10 +37,10 @@ def objective(trial):
         "grow_policy": trial.suggest_categorical(
             "grow_policy", ["lossguide", "depthwise"]
         ),
-        "subsample": trial.suggest_float("subsample", 0.7, 1),
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.7, 1.0),
-        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.7, 1.0),
-        "colsample_bynode": trial.suggest_float("colsample_bynode", 0.7, 1.0),
+        "subsample": trial.suggest_float("subsample", 0.5, 1),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.5, 1.0),
+        "colsample_bynode": trial.suggest_float("colsample_bynode", 0.5, 1.0),
         "alpha": trial.suggest_float("alpha", 1e-10, 10, log=True),
         "lambda": trial.suggest_float("lambda", 1e-10, 10, log=True),
         "objective": "reg:squarederror",
@@ -52,9 +53,9 @@ def objective(trial):
         params | {"seed": 5558675309},
         dtrain,
         nfold=10,
-        num_boost_round=4000,
+        num_boost_round=1000,
         early_stopping_rounds=10,
-        verbose_eval=True,
+        verbose_eval=False,
         metrics="rmse",
         callbacks=[pruning_callback],
     )
@@ -107,14 +108,6 @@ study.optimize(objective, n_trials=3000, show_progress_bar=True, gc_after_trial=
 
 best_params = study.best_params
 
-study_2 = optuna.create_study(
-    study_name=study_name + "_round_2",
-    direction="minimize",
-    storage=sqldb,
-    load_if_exists=True,
-    sampler=sampler,
-    pruner=pruner,
-)
 
 with open("best_params.json", "w") as f:
     json.dump(best_params, f, indent=4)
@@ -123,6 +116,7 @@ model = xgboost.XGBRegressor(
     **best_params,
     eval_metric="rmse",
     n_estimators=1000,
+    n_jobs=10,
     early_stopping_rounds=10,
     enable_categorical=True,
     monotone_constraints={"ATTENDANCE_RATE": 1},
