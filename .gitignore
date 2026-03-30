@@ -22,3 +22,4 @@ optuna.db
 *.txt
 *.parquet
 *.gz
+/.auctex-auto/

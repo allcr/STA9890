@@ -51,7 +51,7 @@ def objective(trial):
     actual_num_rounds = cv_results.shape[0] + 1
     trial.set_user_attr("actual_num_rounds", actual_num_rounds)
     trial.set_user_attr("train-rmse-mean", cv_results["train-rmse-mean"].min())
-    return cv_results["test-rmse-mean"].min(), actual_num_rounds
+    return cv_results["test-rmse-mean"].min()
 
 
 X_train = pl.read_parquet("X_train.parquet")
