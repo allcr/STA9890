@@ -8,6 +8,18 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "activations-plus"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e3/e2/4be2a801e73a0ee6364fd827ff4e727aee1a76c970cb07d502093fbd531f/activations_plus-0.1.1.tar.gz", hash = "sha256:35bf8cf8da08da571b5c065e980bcf3bb91e5529499045c1cee7c0dbd84bfaff", size = 10369, upload-time = "2025-04-20T12:04:03.74Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f4/1f/ff0932d2cb8d6a799d3afced643a2aea1a9106e1fe5f4df9748e1dfefcf5/activations_plus-0.1.1-py3-none-any.whl", hash = "sha256:96e43974052dc0dd809732883cd2b0a7954cf49132a8517795146a56a59dcb62", size = 15931, upload-time = "2025-04-20T12:04:02.465Z" },
+]
+
+[[package]]
 name = "adbc-driver-manager"
 version = "1.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1190,6 +1202,22 @@ wheels = [
 ]
 
 [[package]]
+name = "pytorch-tabnet2"
+version = "4.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "activations-plus" },
+    { name = "numpy" },
+    { name = "scikit-learn" },
+    { name = "torch" },
+    { name = "torcheval" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/14/a1/cfef6063f17bc681988a277d3644eec2c05aa16d089f2dece2bce98b6262/pytorch_tabnet2-4.6.0.tar.gz", hash = "sha256:1bd223655932a513a91b23a50a7044b60656507225daabda65689a18e549b5b0", size = 40144, upload-time = "2026-02-19T12:48:24.272Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/34/0d27f7770e60b28401c853e9938c42bc1d1bb704c3bb49412d5d49707d3a/pytorch_tabnet2-4.6.0-py3-none-any.whl", hash = "sha256:f2cb42810258baf04cc0940164814b26ba8d9251557604ba1253e8a904364764", size = 70810, upload-time = "2026-02-19T12:48:25.53Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1427,6 +1455,7 @@ dependencies = [
     { name = "optuna-dashboard" },
     { name = "optuna-integration", extra = ["xgboost"] },
     { name = "polars", extra = ["all"] },
+    { name = "pytorch-tabnet2" },
     { name = "ruff" },
     { name = "scikit-learn" },
     { name = "torch" },
@@ -1441,6 +1470,7 @@ requires-dist = [
     { name = "optuna-dashboard", specifier = ">=0.20.0" },
     { name = "optuna-integration", extras = ["xgboost"], specifier = ">=4.8.0" },
     { name = "polars", extras = ["all"], specifier = ">=1.39.0" },
+    { name = "pytorch-tabnet2", specifier = ">=4.6.0" },
     { name = "ruff", specifier = ">=0.15.6" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "torch", specifier = ">=2.10.0", index = "https://download.pytorch.org/whl/rocm7.1" },
@@ -1507,6 +1537,18 @@ dependencies = [
 wheels = [
     { url = "https://download.pytorch.org/whl/rocm7.1/torch-2.10.0%2Brocm7.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:65bb4b115023d692d4f230a43e117cbf0373a2de46d6973b113540cfc0243fb6" },
     { url = "https://download.pytorch.org/whl/rocm7.1/torch-2.10.0%2Brocm7.1-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:0c9ad0e87065d1fe981f7dc38d072baaf2ec9994480d5165da98ff6531f33548" },
+]
+
+[[package]]
+name = "torcheval"
+version = "0.0.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f2/65/8f895a132d385c3bc60023a45501637aff63b98629cf45ce47a2035c0cc3/torcheval-0.0.7.tar.gz", hash = "sha256:a498dec34137bc66c9cf1adc7353a46c604dd62255884c72dcb4e2e4fc2cd7e9", size = 100912, upload-time = "2023-08-24T22:12:44.683Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e4/de/e7abc784b00de9d05999657d29187f1f7a3406ed10ecaf164de06482608f/torcheval-0.0.7-py3-none-any.whl", hash = "sha256:20cc34dac7aa9b32f942c8a9f014d1d02098631b6cd0b102c078600577017956", size = 179200, upload-time = "2023-08-24T22:12:42.874Z" },
 ]
 
 [[package]]

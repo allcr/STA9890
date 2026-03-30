@@ -20,3 +20,5 @@ optuna.db
 *.org
 *.log
 *.txt
+*.parquet
+*.gz

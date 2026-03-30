@@ -6,7 +6,6 @@ import optuna
 from sklearn.model_selection import train_test_split
 from optuna.samplers import TPESampler
 import json
-from data_processing import get_data
 
 pl.Config(set_tbl_cols=10000, set_fmt_str_lengths=1000, set_tbl_width_chars=10000)
 pl.enable_string_cache()
@@ -18,8 +17,8 @@ sqldb = "sqlite:///optuna.db"
 
 def objective(trial):
     params = {
-        "eta": trial.suggest_float("eta", 0.01, 0.4),
-        "max_depth": trial.suggest_int("max_depth", 3, 11),
+        "eta": trial.suggest_float("eta", 0.01, 0.4, log=True),
+        "max_depth": trial.suggest_int("max_depth", 3, 12),
         "min_child_weight": trial.suggest_float("min_child_weight", 0.5, 20),
         "gamma": trial.suggest_float("gamma", 1, 20),
         "max_leaves": 0,
@@ -34,9 +33,9 @@ def objective(trial):
         "lambda": trial.suggest_float("lambda", 1e-10, 10, log=True),
         "objective": "reg:squarederror",
         "eval_metric": "rmse",
-        "monotone_constraints": {"ATTENDANCE_RATE": 1},
+        "monotone_constraints": {"ATTENDANCE_RATE": 1, "TEACHER_TURNOVER_RATE": -1},
     }
-    early_stop = xgboost.callback.EarlyStopping(rounds=10, min_delta=0.01)
+    early_stop = xgboost.callback.EarlyStopping(rounds=5, min_delta=0.01)
 
     pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "test-rmse")
     cv_results = xgboost.cv(
@@ -49,12 +48,16 @@ def objective(trial):
         callbacks=[pruning_callback, early_stop],
     )
 
-    trial.set_user_attr("actual_num_rounds", cv_results.shape[0] + 1)
+    actual_num_rounds = cv_results.shape[0] + 1
+    trial.set_user_attr("actual_num_rounds", actual_num_rounds)
     trial.set_user_attr("train-rmse-mean", cv_results["train-rmse-mean"].min())
-    return cv_results["test-rmse-mean"].min()
+    return cv_results["test-rmse-mean"].min(), actual_num_rounds
 
 
-X_train, y_train, X_pred, X_pred_id = get_data()
+X_train = pl.read_parquet("X_train.parquet")
+y_train = pl.read_parquet("y_train.parquet")
+X_pred = pl.read_parquet("X_pred.parquet")
+X_pred_id = pl.read_parquet("X_pred_id.parquet")
 
 
 numeric_cols = (
@@ -93,10 +96,22 @@ study = optuna.create_study(
 )
 
 
-study.optimize(objective, n_trials=3000, show_progress_bar=True, gc_after_trial=True)
-
+study.optimize(objective, n_trials=1000, show_progress_bar=True, gc_after_trial=True)
 best_params = study.best_params
-
+# best so far
+# best_params = {
+#     "eta": 0.13518767484769278,
+#     "max_depth": 12,
+#     "min_child_weight": 1.3710270165974898,
+#     "gamma": 14.344463124330904,
+#     "grow_policy": "lossguide",
+#     "subsample": 0.7078291628467037,
+#     "colsample_bytree": 0.7639343523606379,
+#     "colsample_bylevel": 0.6958261961549946,
+#     "colsample_bynode": 0.9098736694530134,
+#     "alpha": 0.0010924219178128382,
+#     "lambda": 0.0014289343970706983,
+# }
 
 with open("best_params.json", "w") as f:
     json.dump(best_params, f, indent=4)
@@ -104,10 +119,10 @@ with open("best_params.json", "w") as f:
 model = xgboost.XGBRegressor(
     **best_params,
     eval_metric="rmse",
-    n_estimators=1000,
+    n_estimators=5000,
     early_stopping_rounds=10,
     enable_categorical=True,
-    monotone_constraints={"ATTENDANCE_RATE": 1},
+    monotone_constraints={"ATTENDANCE_RATE": 1, "TEACHER_TURNOVER_RATE": -1},
 )
 
 

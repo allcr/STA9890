@@ -10,6 +10,7 @@ dependencies = [
     "optuna-dashboard>=0.20.0",
     "optuna-integration[xgboost]>=4.8.0",
     "polars[all]>=1.39.0",
+    "pytorch-tabnet2>=4.6.0",
     "ruff>=0.15.6",
     "scikit-learn>=1.8.0",
     "torch>=2.10.0",

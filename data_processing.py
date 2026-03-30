@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 
 import polars as pl
+from sklearn.impute import KNNImputer
+
+import warnings
+
+warnings.filterwarnings("ignore", message="codecs.open")
 
 
 def join_tables(df: pl.DataFrame, school: pl.DataFrame, district: pl.DataFrame):
@@ -194,10 +199,10 @@ def join_tables(df: pl.DataFrame, school: pl.DataFrame, district: pl.DataFrame):
         .join(total_local_funding_per_county, on="COUNTY", how="left")
         .join(total_local_funding_per_region, on="REGION", how="left")
         .with_columns(
-            num_students_on_free_lunch=pl.col("N_STUDENTS")
+            num_students_on_free_lunch=pl.col("N_PUPILS")
             .mul(pl.col("PERCENT_FREE_LUNCH"))
             .truediv(100),
-            num_students_on_reduced_lunch=pl.col("N_STUDENTS")
+            num_students_on_reduced_lunch=pl.col("N_PUPILS")
             .mul(pl.col("PERCENT_REDUCED_LUNCH"))
             .truediv(100),
         )
@@ -265,6 +270,46 @@ def get_data():
         .name.keep()
     )
 
+    imputer = KNNImputer(
+        n_neighbors=5,
+        weights="distance",
+        add_indicator=True,
+    )
+    to_impute = [
+        "LOCAL_FUNDING_PER_PUPIL",
+        "FEDERAL_FUNDING_PER_PUPIL",
+        "ATTENDANCE_RATE",
+        "N_PUPILS",
+        "TEACHER_TURNOVER_RATE",
+        "PERCENT_FREE_LUNCH",
+        "PERCENT_REDUCED_LUNCH",
+        "PERCENT_OF_STUDENTS_SUSPENDED",
+        "PERCENT_MALE",
+        "PERCENT_FEMALE",
+        "PERCENT_ENGLISH_LANGUAGE_LEANERS",
+        "PERCENT_AMERICAN_INDIAN",
+        "PERCENT_BLACK",
+        "PERCENT_ASIAN",
+        "PERCENT_HISPANIC",
+        "PERCENT_WHITE",
+        "PERCENT_MULTIRACIAL",
+        "PERCENT_WITH_DISABILITIES",
+        "PERCENT_ECONOMICALLY_DISADVANTAGED",
+        "PERCENT_MIGRANT",
+        "PERCENT_HOMELESS",
+        "PERCENT_IN_FOSTER_CARE",
+        "PERCENT_PARENT_ARMED_FORCES",
+    ]
+    school_imputed = imputer.fit_transform(school.select(to_impute).to_numpy())
+    col_names = to_impute + [f"missingindicator_{c}" for c in to_impute]
+
+    school = school.with_columns(
+        [
+            pl.Series(name=col, values=school_imputed[:, i])
+            for i, col in enumerate(col_names)
+        ]
+    )
+
     X_train = join_tables(train, school, district)
 
     x_train_min_funding = X_train.select(
@@ -278,43 +323,69 @@ def get_data():
         pl.col("rough_total_funding_per_pupil").median()
     ).item()
 
-    X_train = X_train.with_columns(
-        ratio_of_funding_to_min_funding=pl.col("rough_total_funding_per_pupil").truediv(
-            x_train_min_funding
-        ),
-        ratio_of_funding_to_mean_funding=pl.col(
-            "rough_total_funding_per_pupil"
-        ).truediv(x_train_mean_funding),
-        ratio_of_funding_to_median_funding=pl.col(
-            "rough_total_funding_per_pupil"
-        ).truediv(x_train_median_funding),
-    )
+    x_train_local_funding_mean = X_train.select(
+        pl.col("local_funding_per_school").mean()
+    ).item()
 
+    x_train_fed_funding_mean = X_train.select(
+        pl.col("fed_funding_per_school").mean()
+    ).item()
+
+    x_train_local_funding_median = X_train.select(
+        pl.col("local_funding_per_school").median()
+    ).item()
+
+    x_train_fed_funding_median = X_train.select(
+        pl.col("fed_funding_per_school").median()
+    ).item()
+
+    def add_funding_ratio_cols(df):
+        df = df.with_columns(
+            funding_for_number_of_students_in_group_taking_assessment=pl.col(
+                "rough_total_funding_per_pupil"
+            ).mul("N_STUDENTS"),
+            ratio_of_funding_to_min_funding=pl.col(
+                "rough_total_funding_per_pupil"
+            ).truediv(x_train_min_funding),
+            ratio_of_funding_to_mean_funding=pl.col(
+                "rough_total_funding_per_pupil"
+            ).truediv(x_train_mean_funding),
+            ratio_of_funding_to_median_funding=pl.col(
+                "rough_total_funding_per_pupil"
+            ).truediv(x_train_median_funding),
+            ratio_of_total_funding_to_median_local_funding=pl.col(
+                "total_funding_per_school"
+            ).truediv(x_train_local_funding_median),
+            ratio_of_total_funding_to_median_fed_funding=pl.col(
+                "total_funding_per_school"
+            ).truediv(x_train_fed_funding_median),
+            ratio_of_total_funding_to_mean_local_funding=pl.col(
+                "total_funding_per_school"
+            ).truediv(x_train_local_funding_mean),
+            ratio_of_total_funding_to_mean_fed_funding=pl.col(
+                "total_funding_per_school"
+            ).truediv(x_train_fed_funding_mean),
+        )
+        return df
+
+    X_train = add_funding_ratio_cols(X_train)
     y_train = train.select(pl.col("PERCENT_PROFICIENT"))
     X_train = X_train.select(pl.exclude("PERCENT_PROFICIENT"))
 
     X_pred = join_tables(test, school, district)
-
+    X_pred_imputed = imputer.transform(X_pred.select(to_impute).to_numpy())
     X_pred = X_pred.with_columns(
-        ratio_of_funding_to_min_funding=pl.col("rough_total_funding_per_pupil").truediv(
-            x_train_min_funding
-        ),
-        ratio_of_funding_to_mean_funding=pl.col(
-            "rough_total_funding_per_pupil"
-        ).truediv(x_train_mean_funding),
-        ratio_of_funding_to_median_funding=pl.col(
-            "rough_total_funding_per_pupil"
-        ).truediv(x_train_median_funding),
+        [
+            pl.Series(name=col, values=X_pred_imputed[:, i])
+            for i, col in enumerate(col_names)
+        ]
     )
-
+    X_pred = add_funding_ratio_cols(X_pred)
     X_pred_id = test.select(pl.col("ASSESSMENT_ID"))
 
-    X_pred.write_csv("X_pred.csv")
-    X_train.write_csv("X_train.csv")
-    y_train.write_csv("y_train.csv")
-    X_pred_id.write_csv("X_pred_id.csv")
+    X_pred.write_parquet("X_pred.parquet")
+    X_train.write_parquet("X_train.parquet")
+    y_train.write_parquet("y_train.parquet")
+    X_pred_id.write_parquet("X_pred_id.parquet")
 
-    return (X_train, y_train, X_pred, X_pred_id)
-
-
-X_train, y_train, X_pred, X_pred_id = get_data()
+    return None
