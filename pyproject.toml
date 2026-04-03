@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "black>=26.3.1",
+    "lightgbm>=4.6.0",
     "optuna>=4.8.0",
     "optuna-dashboard>=0.20.0",
     "optuna-integration[xgboost]>=4.8.0",

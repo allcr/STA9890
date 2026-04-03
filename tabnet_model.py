@@ -1,30 +1,37 @@
 import numpy as np
-import pandas as pd
 import optuna
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import (
     PowerTransformer,
     StandardScaler,
-    OrdinalEncoder,
 )
-from sklearn.impute import SimpleImputer
+
 from pytorch_tabnet import TabNetRegressor, TabNetPretrainer
 import polars as pl
+from polars import selectors as cs
 import json
+import random
 
+pl.enable_string_cache()
+study_name = "tabnet"
 sqldb = "sqlite:///optuna.db"
-study_name = "xgboost"
+
 
 SEED = 8675309
 np.random.seed(SEED)
+random.seed(SEED)
 
-X_train = pl.read_parquet("X_train.parquet")
+X_train = pl.read_parquet("X_train.parquet").with_columns(
+    cs.categorical().to_physical().name.keep()
+)
 y_train = pl.read_parquet("y_train.parquet")
-X_pred = pl.read_parquet("X_pred.parquet")
+X_pred = pl.read_parquet("X_pred.parquet").with_columns(
+    cs.categorical().to_physical().name.keep()
+)
 X_pred_id = pl.read_parquet("X_pred_id.parquet")
 
 
-CAT_COLS = [
+categories = [
     "ASSESSMENT_ID",
     "SCHOOL",
     "SUBGROUP_NAME",
@@ -34,28 +41,19 @@ CAT_COLS = [
     "DISTRICT_TYPE",
     "REGION",
 ]
-NUM_COLS = [c for c in X_train.columns if c not in CAT_COLS]
+numeric = [c for c in X_train.columns if c not in categories]
 
 
-oe = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
-X_all_cat = pd.concat([X_train[CAT_COLS], X_pred[CAT_COLS]], axis=0).astype(str)
-oe.fit(X_all_cat)
-X_train[CAT_COLS] = oe.transform(X_train[CAT_COLS].astype(str)).astype(int)
-X_pred[CAT_COLS] = oe.transform(X_pred[CAT_COLS].astype(str)).astype(int)
+cat_idxs = [X_train.columns.get_loc(c) for c in categories]
+cat_dims = [X_train.select(pl.col(c)).n_unique() for c in categories]
 
-cat_idxs = [X_train.columns.get_loc(c) for c in CAT_COLS]
-cat_dims = [len(cats) for cats in oe.categories_]
 
-imputer = SimpleImputer(strategy="median")
 pt = PowerTransformer(method="yeo-johnson")
 ss = StandardScaler()
 
 
-X_train[NUM_COLS] = imputer.fit_transform(X_train[NUM_COLS])
-X_pred[NUM_COLS] = imputer.transform(X_pred[NUM_COLS])
-
-X_train[NUM_COLS] = ss.fit_transform(pt.fit_transform(X_train[NUM_COLS]))
-X_pred[NUM_COLS] = ss.transform(pt.transform(X_pred[NUM_COLS]))
+X_train[numeric] = ss.fit_transform(pt.fit_transform(X_train[numeric]))
+X_pred[numeric] = ss.transform(pt.transform(X_pred[numeric]))
 
 X_train_np = X_train.values.astype(np.float32)
 X_pred_np = X_pred.values.astype(np.float32)
@@ -104,16 +102,16 @@ def objective(trial):
 sampler = optuna.samplers.TPESampler(seed=8675309)
 study = optuna.create_study(
     direction="minimize",
-    study_name="tabnet",
+    study_name=study_name,
     storage=sqldb,
     load_if_exists=True,
     sampler=sampler,
 )
-study.optimize(objective, n_trials=500, show_progress_bar=True)
+study.optimize(objective, n_trials=2000, show_progress_bar=True)
 
 
 best = study.best_params
-with open("best_params.json", "w") as f:
+with open("best_params_tabnet.json", "w") as f:
     json.dump(best, f, indent=4)
 
 pretrain = TabNetPretrainer(
@@ -179,4 +177,3 @@ y_pred = final.predict(X_pred_np)
 out = X_pred_id.copy()
 out["PERCENT_PROFICIENT"] = y_pred.ravel()
 out.to_csv("submission_tabnet.csv", index=False)
-print("wrote submission_tabnet.csv")

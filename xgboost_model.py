@@ -113,7 +113,7 @@ best_params = study.best_params
 #     "lambda": 0.0014289343970706983,
 # }
 
-with open("best_params.json", "w") as f:
+with open("best_params_xgboost.json", "w") as f:
     json.dump(best_params, f, indent=4)
 
 model = xgboost.XGBRegressor(
