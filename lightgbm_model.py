@@ -16,6 +16,7 @@ sqldb = "sqlite:///optuna.db"
 
 
 def objective(trial):
+
     params = {
         "objective": "regression",
         "metric": "rmse",
@@ -33,12 +34,20 @@ def objective(trial):
         "lambda_l2": trial.suggest_float("lambda_l2", 1e-10, 10, log=True),
     }
 
-    es = lightgbm.callback.early_stopping(stopping_rounds=5, min_delta=0.01)
+    monotone_constraints_dict = {"ATTENDANCE_RATE": 1, "TEACHER_TURNOVER_RATE": -1}
+    feature_names = X_train.columns
+    ordered_constraints = [
+        monotone_constraints_dict.get(name, 0) for name in feature_names
+    ]
+
+    es = lightgbm.callback.early_stopping(
+        stopping_rounds=5, min_delta=0.01, verbose=False
+    )
     pruning_callback = optuna.integration.LightGBMPruningCallback(
         trial, "rmse", valid_name="valid"
     )
     cv_results = lightgbm.cv(
-        params | {"seed": 5558675309},
+        params | {"seed": 5558675309} | {"monotone_constraints": ordered_constraints},
         dtrain,
         nfold=10,
         num_boost_round=1000,
@@ -93,7 +102,7 @@ study = optuna.create_study(
 )
 
 
-study.optimize(objective, n_trials=3000, show_progress_bar=True, gc_after_trial=True)
+study.optimize(objective, n_trials=10000, gc_after_trial=True)
 best_params = study.best_params
 
 with open("best_params_lightgbm.json", "w") as f:
