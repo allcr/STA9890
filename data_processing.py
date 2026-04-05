@@ -8,13 +8,53 @@ import warnings
 warnings.filterwarnings("ignore", message="codecs.open")
 
 
-# TODO Label schools elementary, middle, k-8, k-12, etc.
+categories = [
+    "ASSESSMENT_ID",
+    "SCHOOL",
+    "SUBGROUP_NAME",
+    "ASSESSMENT_NAME",
+    "DISTRICT",
+    "COUNTY",
+    "DISTRICT_TYPE",
+    "REGION",
+    "school_type",
+]
+cat_set = set(categories)
+
+
+def grouped_agg_features(df, cat_cols, num_cols):
+    for cat in cat_cols:
+        agg = df.group_by(cat).agg(
+            [pl.col(n).mean().alias(f"{n}_mean_by_{cat}") for n in num_cols]
+            + [pl.col(n).median().alias(f"{n}_median_by_{cat}") for n in num_cols]
+            + [pl.col(n).sum().alias(f"{n}_sum_by_{cat}") for n in num_cols]
+        )
+        df = df.join(agg, on=cat, how="left")
+    return df
 
 
 def df_district_type_level_gb(df, col_to_use, new_col_name):
     df_new = (
         df.filter(pl.col(col_to_use).is_not_null())
         .group_by(["REGION", "COUNTY", "DISTRICT_TYPE"])
+        .agg(pl.col(col_to_use).median().alias(new_col_name))
+    )
+    return df_new
+
+
+def df_county_level_gb(df, col_to_use, new_col_name):
+    df_new = (
+        df.filter(pl.col(col_to_use).is_not_null())
+        .group_by(["REGION", "COUNTY"])
+        .agg(pl.col(col_to_use).median().alias(new_col_name))
+    )
+    return df_new
+
+
+def df_region_level_gb(df, col_to_use, new_col_name):
+    df_new = (
+        df.filter(pl.col(col_to_use).is_not_null())
+        .group_by(["REGION"])
         .agg(pl.col(col_to_use).median().alias(new_col_name))
     )
     return df_new
@@ -53,6 +93,51 @@ def join_tables(df: pl.DataFrame, school: pl.DataFrame, district: pl.DataFrame):
         "NUMBER_OF_COUNSELORS": "district_type_level_median_number_of_counselors",
         "NUMBER_OF_SOCIAL_WORKERS": "district_type_level_median_number_of_social_workers",
         "N_PUPILS": "district_type_level_median_number_of_pupils",
+    }
+
+    county_level_columns_to_aggregate = {
+        "GRADE_1_AVERAGE_CLASS_SIZE": "county_median_grade_1_size",
+        "GRADE_2_AVERAGE_CLASS_SIZE": "county_median_grade_2_size",
+        "KINDERGARTEN_AVERAGE_CLASS_SIZE": "county_median_kindergarten_class_size",
+        "PRE_K": "county_median_pre_K_students",
+        "K": "county_median_kindergarten_students",
+        **{f"GRADE_{i:02d}": f"county_median_grade_{i}_students" for i in range(1, 13)},
+        "ATTENDANCE_RATE": "county_median_attendance_rate",
+        "TEACHER_TURNOVER_RATE": "county_median_teacher_turnover_rate",
+        "LANGUAGE_ARTS_AVERAGE_CLASS_SIZE": "county_median_language_class_size",
+        "MATHEMATICS_AVERAGE_CLASS_SIZE": "county_median_math_class_size",
+        "SCIENCE_AVERAGE_CLASS_SIZE": "county_median_science_class_size",
+        "HISTORY_GOVERNMENT_AND_GEOGRAPHY_AVERAGE_CLASS_SIZE": "county_median_class_size",
+        "PERCENT_FREE_LUNCH": "county_median_percent_free_lunch",
+        "PERCENT_REDUCED_LUNCH": "county_median_reduced_lunch",
+        "NUMBER_OF_TEACHERS": "county_median_number_of_teachers",
+        "NUMBER_OF_COUNSELORS": "county_median_number_of_counselors",
+        "NUMBER_OF_SOCIAL_WORKERS": "county_median_number_of_social_workers",
+        "N_PUPILS": "county_median_number_of_pupils",
+    }
+
+    region_level_columns_to_aggregate = {
+        "GRADE_1_AVERAGE_CLASS_SIZE": "region_level_median_grade_1_size",
+        "GRADE_2_AVERAGE_CLASS_SIZE": "region_level_median_grade_2_size",
+        "KINDERGARTEN_AVERAGE_CLASS_SIZE": "region_level_median_kindergarten_class_size",
+        "PRE_K": "region_level_median_pre_K_students",
+        "K": "region_level_median_kindergarten_students",
+        **{
+            f"GRADE_{i:02d}": f"region_level_median_grade_{i}_students"
+            for i in range(1, 13)
+        },
+        "ATTENDANCE_RATE": "region_level_median_attendance_rate",
+        "TEACHER_TURNOVER_RATE": "region_level_median_teacher_turnover_rate",
+        "LANGUAGE_ARTS_AVERAGE_CLASS_SIZE": "region_level_median_language_class_size",
+        "MATHEMATICS_AVERAGE_CLASS_SIZE": "region_level_median_math_class_size",
+        "SCIENCE_AVERAGE_CLASS_SIZE": "region_level_median_science_class_size",
+        "HISTORY_GOVERNMENT_AND_GEOGRAPHY_AVERAGE_CLASS_SIZE": "region_level_median_class_size",
+        "PERCENT_FREE_LUNCH": "region_level_median_percent_free_lunch",
+        "PERCENT_REDUCED_LUNCH": "region_level_median_reduced_lunch",
+        "NUMBER_OF_TEACHERS": "region_level_median_number_of_teachers",
+        "NUMBER_OF_COUNSELORS": "region_level_median_number_of_counselors",
+        "NUMBER_OF_SOCIAL_WORKERS": "region_level_median_number_of_social_workers",
+        "N_PUPILS": "region_level_median_number_of_pupils",
     }
 
     x_per_y_unique_aggs = [
@@ -167,10 +252,18 @@ def join_tables(df: pl.DataFrame, school: pl.DataFrame, district: pl.DataFrame):
         agg_df = df_district_type_level_gb(school, col, alias)
         res = res.join(agg_df, on=["REGION", "COUNTY", "DISTRICT_TYPE"], how="left")
 
+    for col, alias in county_level_columns_to_aggregate.items():
+        agg_df = df_county_level_gb(school, col, alias)
+        res = res.join(agg_df, on=["REGION", "COUNTY"], how="left")
+
+    for col, alias in region_level_columns_to_aggregate.items():
+        agg_df = df_region_level_gb(school, col, alias)
+        res = res.join(agg_df, on=["REGION"], how="left")
+
     return res
 
 
-def get_data():
+def get_data(cached=True):
     train = pl.read_csv(
         "https://michael-weylandt.com/STA9890/competition_data/scores_training.csv",
         schema_overrides={
@@ -227,7 +320,6 @@ def get_data():
             ),
         )
     ).with_columns(
-        # clean up the easy cases for average class size variables
         KINDERGARTEN_AVERAGE_CLASS_SIZE=pl.when(pl.col("K").eq(pl.lit(0)))
         .then(pl.lit(0))
         .when(
@@ -258,6 +350,71 @@ def get_data():
         .then(pl.col("GRADE_2_AVERAGE_CLASS_SIZE"))
         .when(pl.col("GRADE_2_AVERAGE_CLASS_SIZE").is_not_null())
         .then(pl.col("GRADE_2_AVERAGE_CLASS_SIZE")),
+    )
+
+    grade_cols = {
+        "PRE_K": -1,
+        "K": 0,
+        "GRADE_01": 1,
+        "GRADE_02": 2,
+        "GRADE_03": 3,
+        "GRADE_04": 4,
+        "GRADE_05": 5,
+        "GRADE_06": 6,
+        "GRADE_07": 7,
+        "GRADE_08": 8,
+        "GRADE_09": 9,
+        "GRADE_10": 10,
+        "GRADE_11": 11,
+        "GRADE_12": 12,
+    }
+
+    has_pupils = [
+        pl.col(col).is_not_null().and_(pl.col(col) > 0).alias(f"has_{col}")
+        for col in grade_cols
+    ]
+
+    school = school.with_columns(has_pupils)
+
+    min_grade = pl.min_horizontal(
+        *[
+            pl.when(pl.col(f"has_{col}")).then(pl.lit(level)).otherwise(pl.lit(None))
+            for col, level in grade_cols.items()
+        ]
+    ).alias("min_grade")
+
+    max_grade = pl.max_horizontal(
+        *[
+            pl.when(pl.col(f"has_{col}")).then(pl.lit(level)).otherwise(pl.lit(None))
+            for col, level in grade_cols.items()
+        ]
+    ).alias("max_grade")
+
+    school = school.with_columns(min_grade, max_grade)
+
+    school = school.with_columns(
+        pl.when((pl.col("min_grade") == -1) & (pl.col("max_grade") == -1))
+        .then(pl.lit("nursery"))
+        .when((pl.col("min_grade") == -1) & (pl.col("max_grade") <= 5))
+        .then(pl.lit("pre_k_elementary"))
+        .when((pl.col("min_grade") == -1) & (pl.col("max_grade") <= 8))
+        .then(pl.lit("pre_k_8"))
+        .when((pl.col("min_grade") == -1) & (pl.col("max_grade") <= 12))
+        .then(pl.lit("pre_k_12"))
+        .when((pl.col("min_grade") == 0) & (pl.col("max_grade") <= 5))
+        .then(pl.lit("elementary"))
+        .when((pl.col("min_grade") == 0) & (pl.col("max_grade") <= 8))
+        .then(pl.lit("k_8"))
+        .when((pl.col("min_grade") == 0) & (pl.col("max_grade") <= 12))
+        .then(pl.lit("k_12"))
+        .when((pl.col("min_grade") >= 6) & (pl.col("max_grade") <= 8))
+        .then(pl.lit("middle_school"))
+        .when((pl.col("min_grade") >= 9) & (pl.col("max_grade") <= 12))
+        .then(pl.lit("high_school"))
+        .when((pl.col("min_grade") >= 6) & (pl.col("max_grade") <= 12))
+        .then(pl.lit("secondary"))
+        .otherwise(pl.lit("other"))
+        .alias("school_type")
     )
 
     district = pl.read_csv(
@@ -345,10 +502,25 @@ def get_data():
     X_pred = join_tables(test, school, district)
     X_pred = add_funding_ratio_cols(X_pred)
     X_pred_id = test.select(pl.col("ASSESSMENT_ID"))
+    num_cols = [
+        c
+        for c in X_train.columns
+        if c not in cat_set
+        and not c.startswith("has_")
+        and X_train[c].dtype not in (pl.Boolean, pl.Utf8, pl.Categorical)
+    ]
 
-    X_pred.write_parquet("X_pred.parquet")
-    X_train.write_parquet("X_train.parquet")
-    y_train.write_parquet("y_train.parquet")
-    X_pred_id.write_parquet("X_pred_id.parquet")
+    group_cats = [c for c in categories if c in X_train.columns]
 
-    return None
+    X_train = grouped_agg_features(X_train, group_cats, num_cols)
+    X_pred = grouped_agg_features(X_pred, group_cats, num_cols)
+
+    if cached:
+        X_pred.write_parquet("X_pred.parquet")
+        X_train.write_parquet("X_train.parquet")
+        y_train.write_parquet("y_train.parquet")
+        X_pred_id.write_parquet("X_pred_id.parquet")
+
+        return None
+    else:
+        return X_pred, X_train, y_train, X_pred_id

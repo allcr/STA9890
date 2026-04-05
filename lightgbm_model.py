@@ -3,7 +3,6 @@ from polars import selectors as cs
 import lightgbm
 import random
 import optuna
-from sklearn.model_selection import train_test_split
 from optuna.samplers import TPESampler
 import json
 
@@ -12,7 +11,10 @@ pl.enable_string_cache()
 random.seed(8675309)
 
 study_name = "lightgbm"
-sqldb = "sqlite:///optuna.db"
+
+storage = optuna.storages.JournalStorage(
+    optuna.storages.journal.JournalFileBackend("./lightgbm_journal_storage.log")
+)
 
 
 def objective(trial):
@@ -24,38 +26,34 @@ def objective(trial):
         "boosting_type": "gbdt",
         "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.4, log=True),
         "max_depth": trial.suggest_int("max_depth", 5, 20),
-        "num_leaves": trial.suggest_int("num_leaves", 8, 256),
-        "min_child_weight": trial.suggest_float("min_child_weight", 0.5, 20),
-        "min_gain_to_split": trial.suggest_float("min_gain_to_split", 1, 20),
+        "num_leaves": trial.suggest_int("num_leaves", 8, 128),
+        "min_child_weight": trial.suggest_float("min_child_weight", 0.1, 20),
+        "min_gain_to_split": trial.suggest_float("min_gain_to_split", 0.1, 20),
         "subsample": trial.suggest_float("subsample", 0.5, 1),
-        "bagging_freq": 1,
+        "bagging_freq": trial.suggest_int("bagging_freq", 1, 5),
+        "bagging_fraction": trial.suggest_float("bagging_fraction", 0.4, 0.95),
         "feature_fraction": trial.suggest_float("feature_fraction", 0.5, 1.0),
         "lambda_l1": trial.suggest_float("lambda_l1", 1e-10, 10, log=True),
         "lambda_l2": trial.suggest_float("lambda_l2", 1e-10, 10, log=True),
     }
 
-    monotone_constraints_dict = {"ATTENDANCE_RATE": 1, "TEACHER_TURNOVER_RATE": -1}
-    feature_names = X_train.columns
-    ordered_constraints = [
-        monotone_constraints_dict.get(name, 0) for name in feature_names
-    ]
-
     es = lightgbm.callback.early_stopping(
-        stopping_rounds=5, min_delta=0.01, verbose=False
+        stopping_rounds=20, min_delta=0.01, verbose=False
     )
+
     pruning_callback = optuna.integration.LightGBMPruningCallback(
         trial, "rmse", valid_name="valid"
     )
     cv_results = lightgbm.cv(
         params | {"seed": 5558675309} | {"monotone_constraints": ordered_constraints},
         dtrain,
-        nfold=10,
-        num_boost_round=1000,
+        nfold=5,
+        num_boost_round=5000,
         metrics="rmse",
-        callbacks=[pruning_callback, es],
+        callbacks=[es, pruning_callback],
     )
 
-    actual_num_rounds = len(cv_results["valid rmse-mean"]) + 1
+    actual_num_rounds = len(cv_results["valid rmse-mean"])
     trial.set_user_attr("actual_num_rounds", actual_num_rounds)
 
     return min(cv_results["valid rmse-mean"])
@@ -89,21 +87,34 @@ X_pred_pd = X_pred.to_pandas()
 y_train_np = y_train.to_numpy().ravel()
 
 dtrain = lightgbm.Dataset(X_train_pd, label=y_train_np, free_raw_data=False)
+monotone_constraints_dict = {"ATTENDANCE_RATE": 1, "TEACHER_TURNOVER_RATE": -1}
+feature_names = X_train.columns
+ordered_constraints = [monotone_constraints_dict.get(name, 0) for name in feature_names]
 
 sampler = TPESampler(seed=8675309)
-pruner = optuna.pruners.HyperbandPruner(min_resource=5)
+pruner = optuna.pruners.PatientPruner(
+    optuna.pruners.MedianPruner(
+        n_warmup_steps=150,
+        n_startup_trials=50,
+        n_min_trials=50,
+        interval_steps=10,
+    ),
+    patience=5,
+)
+
 study = optuna.create_study(
     study_name=study_name,
     direction="minimize",
-    storage=sqldb,
+    storage=storage,
     load_if_exists=True,
     sampler=sampler,
     pruner=pruner,
 )
 
 
-study.optimize(objective, n_trials=10000, gc_after_trial=True)
+study.optimize(objective, n_trials=10000, show_progress_bar=True, gc_after_trial=True)
 best_params = study.best_params
+best_rounds = study.best_trial.user_attrs["actual_num_rounds"]
 
 with open("best_params_lightgbm.json", "w") as f:
     json.dump(best_params, f, indent=4)
@@ -112,16 +123,13 @@ model = lightgbm.LGBMRegressor(
     **best_params,
     metric="rmse",
     importance_type="gain",
-    n_estimators=5000,
-    early_stopping_rounds=10,
+    n_estimators=best_rounds,
     enable_categorical=True,
+    monotone_constraints=ordered_constraints,
 )
 
 
-X_tr, X_val, y_tr, y_val = train_test_split(
-    X_train_pd, y_train_np, test_size=0.15, random_state=5256000
-)
-model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)])
+model.fit(X_train_pd, y_train_np)
 
 y_pred = model.predict(X_pred_pd)
 
