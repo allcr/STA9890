@@ -11,41 +11,34 @@ wheels/
 /.idea/
 .Rproj.user
 
-#Other
-optuna.db
+# Data and models (regeneratable)
 *.db
 *.rds
-*.json
 *.csv
-*.org
-*.log
-*.txt
 *.parquet
 *.gz
-/.auctex-auto/
 
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-/.idea/
-.Rproj.user
-
-#Other
-optuna.db
-*.db
-*.rds
-*.json
-*.csv
-*.org
+# Logs
 *.log
-*.txt
-*.parquet
-*.gz
+*.log.bak
+nohup.out
+debug.log
+
+# Org / aux / bib
 /.auctex-auto/
+*.org
+*.bib
+.~lock.*
+
+# Runtime state
+warmstart_markers_*/
+catboost_info/
+fitted_experts_*/
+
+# Tuned params explicitly tracked
+*.json
+!best_params_*/*.json
+
+# IDE / editor caches
+.ruff_cache/
+.vscode/
