@@ -965,7 +965,7 @@ def get_data(cached=True):
                 .otherwise(0)
             )
             .with_columns(
-                is_math=pl.when(
+                is_algebra=pl.when(
                     (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Algebra"))
                 )
                 .then(pl.lit(1))
@@ -1155,6 +1155,7 @@ def get_data(cached=True):
                 & pl.col("N_STUDENTS").is_not_null()
             )
             .then(pl.col("N_STUDENTS").truediv(pl.col("N_PUPILS")))
+            .otherwise(pl.lit(0))
             .alias("size_of_group"),
         ]
     ).with_columns(
@@ -1162,12 +1163,16 @@ def get_data(cached=True):
             (pl.col("is_three").eq(1))
             & pl.col("GRADE_03").is_not_null()
             & pl.col("GRADE_03").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_03"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_03")))
+        .otherwise(pl.lit(0)),
         size_of_4=pl.when(
             (pl.col("is_four").eq(1))
             & pl.col("GRADE_04").is_not_null()
             & pl.col("GRADE_04").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_04"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_04")))
+        .otherwise(pl.lit(0)),
         size_of_5=pl.when(
             (pl.col("is_five").eq(1))
             & pl.col("GRADE_05").is_not_null()
@@ -1179,17 +1184,23 @@ def get_data(cached=True):
             (pl.col("is_six").eq(1))
             & pl.col("GRADE_06").is_not_null()
             & pl.col("GRADE_06").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_06"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_06")))
+        .otherwise(pl.lit(0)),
         size_of_7=pl.when(
             (pl.col("is_seven").eq(1))
             & pl.col("GRADE_07").is_not_null()
             & pl.col("GRADE_07").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_07"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_07")))
+        .otherwise(pl.lit(0)),
         size_of_8=pl.when(
             (pl.col("is_eight").eq(1))
             & pl.col("GRADE_08").is_not_null()
             & pl.col("GRADE_08").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_08"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_08")))
+        .otherwise(pl.lit(0)),
         size_of_regent=pl.when(
             (pl.col("is_regent").eq(1))
             & pl.col("GRADE_09").is_not_null()
@@ -1202,14 +1213,16 @@ def get_data(cached=True):
                 .add(pl.col("GRADE_11"))
                 .add(pl.col("GRADE_12"))
             ).gt(0)
-        ).then(
+        )
+        .then(
             pl.col("N_STUDENTS").truediv(
                 pl.col("GRADE_09")
                 .add(pl.col("GRADE_10"))
                 .add(pl.col("GRADE_11"))
                 .add(pl.col("GRADE_12"))
             )
-        ),
+        )
+        .otherwise(pl.lit(0)),
         high_need_regents=pl.when(
             (pl.col("is_high_need").eq(1)) & (pl.col("is_regent").eq(1))
         )
@@ -1230,7 +1243,9 @@ def get_data(cached=True):
         .otherwise(pl.lit(0)),
         high_need_common_core=pl.when(
             (pl.col("is_high_need").eq(1)) & (pl.col("is_common_core").eq(1))
-        ).then(pl.lit(1)),
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
         is_all_students_regent=pl.when(
             (pl.col("SUBGROUP_NAME").eq("All Students")) & (pl.col("is_regent").eq(1))
         )
@@ -1294,32 +1309,44 @@ def get_data(cached=True):
             (pl.col("is_three").eq(1))
             & pl.col("GRADE_03").is_not_null()
             & pl.col("GRADE_03").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_03"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_03")))
+        .otherwise(pl.lit(0)),
         size_of_4=pl.when(
             (pl.col("is_four").eq(1))
             & pl.col("GRADE_04").is_not_null()
             & pl.col("GRADE_04").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_04"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_04")))
+        .otherwise(pl.lit(0)),
         size_of_5=pl.when(
             (pl.col("is_five").eq(1))
             & pl.col("GRADE_05").is_not_null()
             & pl.col("GRADE_05").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_05"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_05")))
+        .otherwise(pl.lit(0)),
         size_of_6=pl.when(
             (pl.col("is_six").eq(1))
             & pl.col("GRADE_06").is_not_null()
             & pl.col("GRADE_06").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_06"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_06")))
+        .otherwise(pl.lit(0)),
         size_of_7=pl.when(
             (pl.col("is_seven").eq(1))
             & pl.col("GRADE_07").is_not_null()
             & pl.col("GRADE_07").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_07"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_07")))
+        .otherwise(pl.lit(0)),
         size_of_8=pl.when(
             (pl.col("is_eight").eq(1))
             & pl.col("GRADE_08").is_not_null()
             & pl.col("GRADE_08").gt(0)
-        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_08"))),
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_08")))
+        .otherwise(pl.lit(0)),
         size_of_regent=pl.when(
             (pl.col("is_regent").eq(1))
             & pl.col("GRADE_09").is_not_null()
@@ -1332,14 +1359,16 @@ def get_data(cached=True):
                 .add(pl.col("GRADE_11"))
                 .add(pl.col("GRADE_12"))
             ).gt(0)
-        ).then(
+        )
+        .then(
             pl.col("N_STUDENTS").truediv(
                 pl.col("GRADE_09")
                 .add(pl.col("GRADE_10"))
                 .add(pl.col("GRADE_11"))
                 .add(pl.col("GRADE_12"))
             )
-        ),
+        )
+        .otherwise(pl.lit(0)),
         is_history=pl.when(
             pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("History")
         )
@@ -1370,7 +1399,9 @@ def get_data(cached=True):
         .otherwise(pl.lit(0)),
         high_need_common_core=pl.when(
             (pl.col("is_high_need").eq(1)) & (pl.col("is_common_core").eq(1))
-        ).then(pl.lit(1)),
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
         double_high_needs=pl.when(
             (pl.col("is_high_need").eq(1))
             & (pl.col("SUBGROUP_NAME").eq("Economically Disadvantaged"))
