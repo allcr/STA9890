@@ -35,6 +35,9 @@ warmstart_markers_*/
 catboost_info/
 fitted_experts_*/
 
+# aock
+aocl-linux-aocc-5.2.0/
+
 # Tuned params explicitly tracked
 *.json
 !best_params_*/*.json
