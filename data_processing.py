@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
 import polars as pl
-from sklearn.impute import KNNImputer
-
+import numpy as np
+import pandas as pd
+from autofeat import AutoFeatModel
 import warnings
+from sklearn.impute import SimpleImputer
 
 warnings.filterwarnings("ignore", message="codecs.open")
 
@@ -21,43 +23,95 @@ categories = [
 ]
 cat_set = set(categories)
 
+school_demographic_cols = [
+    "PERCENT_AMERICAN_INDIAN",
+    "PERCENT_BLACK",
+    "PERCENT_ASIAN",
+    "PERCENT_HISPANIC",
+    "PERCENT_WHITE",
+    "PERCENT_MULTIRACIAL",
+    "PERCENT_WITH_DISABILITIES",
+    "PERCENT_ECONOMICALLY_DISADVANTAGED",
+    "PERCENT_MIGRANT",
+    "PERCENT_HOMELESS",
+    "PERCENT_IN_FOSTER_CARE",
+    "PERCENT_PARENT_ARMED_FORCES",
+    "PERCENT_OF_STUDENTS_SUSPENDED",
+    "PERCENT_ENGLISH_LANGUAGE_LEANERS",
+]
+district_demographic_cols = [
+    "PERCENT_NON_DIPLOMA",
+    "PERCENT_DIPLOMA",
+    "PERCENT_DROPOUT",
+    "PERCENT_GED",
+    "PERCENT_STILL_ENROLLED",
+]
+demographic_cols = school_demographic_cols + district_demographic_cols
 
-def grouped_agg_features(df, cat_cols, num_cols):
-    for cat in cat_cols:
-        agg = df.group_by(cat).agg(
-            [pl.col(n).mean().alias(f"{n}_mean_by_{cat}") for n in num_cols]
-            + [pl.col(n).median().alias(f"{n}_median_by_{cat}") for n in num_cols]
-            + [pl.col(n).sum().alias(f"{n}_sum_by_{cat}") for n in num_cols]
-        )
-        df = df.join(agg, on=cat, how="left")
-    return df
+# def grouped_agg_features(df, cat_cols, num_cols):
+#     for cat in cat_cols:
+#         agg = df.group_by(cat).agg(
+#             [pl.col(n).mean().alias(f"{n}_mean_by_{cat}") for n in num_cols]
+#             + [pl.col(n).median().alias(f"{n}_median_by_{cat}") for n in num_cols]
+#             + [pl.col(n).sum().alias(f"{n}_sum_by_{cat}") for n in num_cols]
+#         )
+#         df = df.join(agg, on=cat, how="left")
+#     return df
+zero_meaningful_cols = set(school_demographic_cols) | set(district_demographic_cols)
 
 
 def df_district_type_level_gb(df, col_to_use, new_col_name):
-    df_new = (
-        df.filter(pl.col(col_to_use).is_not_null())
-        .group_by(["REGION", "COUNTY", "DISTRICT_TYPE"])
-        .agg(pl.col(col_to_use).median().alias(new_col_name))
+    df_new = df.filter(pl.col(col_to_use).is_not_null())
+    if col_to_use not in zero_meaningful_cols:
+        df_new = df_new.filter(pl.col(col_to_use).gt(0))
+    return df_new.group_by(["DISTRICT_TYPE"]).agg(
+        pl.col(col_to_use).median().alias(new_col_name)
     )
-    return df_new
 
 
 def df_county_level_gb(df, col_to_use, new_col_name):
-    df_new = (
-        df.filter(pl.col(col_to_use).is_not_null())
-        .group_by(["REGION", "COUNTY"])
-        .agg(pl.col(col_to_use).median().alias(new_col_name))
+    df_new = df.filter(pl.col(col_to_use).is_not_null())
+    if col_to_use not in zero_meaningful_cols:
+        df_new = df_new.filter(pl.col(col_to_use).gt(0))
+    return df_new.group_by(["COUNTY"]).agg(
+        pl.col(col_to_use).median().alias(new_col_name)
     )
-    return df_new
 
 
 def df_region_level_gb(df, col_to_use, new_col_name):
-    df_new = (
-        df.filter(pl.col(col_to_use).is_not_null())
-        .group_by(["REGION"])
-        .agg(pl.col(col_to_use).median().alias(new_col_name))
+    df_new = df.filter(pl.col(col_to_use).is_not_null())
+    if col_to_use not in zero_meaningful_cols:
+        df_new = df_new.filter(pl.col(col_to_use).gt(0))
+    return df_new.group_by(["REGION"]).agg(
+        pl.col(col_to_use).median().alias(new_col_name)
     )
-    return df_new
+
+
+def df_district_level_gb(df, col_to_use, new_col_name):
+    df_new = df.filter(pl.col(col_to_use).is_not_null())
+    if col_to_use not in zero_meaningful_cols:
+        df_new = df_new.filter(pl.col(col_to_use).gt(0))
+    return df_new.group_by(["DISTRICT"]).agg(
+        pl.col(col_to_use).median().alias(new_col_name)
+    )
+
+
+def df_macro_region_level_gb(df, col_to_use, new_col_name):
+    df_new = df.filter(pl.col(col_to_use).is_not_null())
+    if col_to_use not in zero_meaningful_cols:
+        df_new = df_new.filter(pl.col(col_to_use).gt(0))
+    return df_new.group_by(["MACRO_REGION"]).agg(
+        pl.col(col_to_use).median().alias(new_col_name)
+    )
+
+
+def df_state_level_gb(df, col_to_use, new_col_name):
+    df_new = df.filter(pl.col(col_to_use).is_not_null())
+    if col_to_use not in zero_meaningful_cols:
+        df_new = df_new.filter(pl.col(col_to_use).gt(0))
+    return df_new.select(pl.col(col_to_use).median().alias(new_col_name)).with_columns(
+        pl.lit(1).alias("_state_key")
+    )
 
 
 def df_total_unique_x_per_y(df, group_col, count_col, agg_name):
@@ -89,6 +143,7 @@ def join_tables(df: pl.DataFrame, school: pl.DataFrame, district: pl.DataFrame):
         "HISTORY_GOVERNMENT_AND_GEOGRAPHY_AVERAGE_CLASS_SIZE": "district_type_level_median_class_size",
         "PERCENT_FREE_LUNCH": "district_type_level_median_percent_free_lunch",
         "PERCENT_REDUCED_LUNCH": "district_type_level_median_reduced_lunch",
+        **{c: f"median_district_{c.lower()}" for c in demographic_cols},
         "NUMBER_OF_TEACHERS": "district_type_level_median_number_of_teachers",
         "NUMBER_OF_COUNSELORS": "district_type_level_median_number_of_counselors",
         "NUMBER_OF_SOCIAL_WORKERS": "district_type_level_median_number_of_social_workers",
@@ -114,6 +169,7 @@ def join_tables(df: pl.DataFrame, school: pl.DataFrame, district: pl.DataFrame):
         "NUMBER_OF_COUNSELORS": "county_median_number_of_counselors",
         "NUMBER_OF_SOCIAL_WORKERS": "county_median_number_of_social_workers",
         "N_PUPILS": "county_median_number_of_pupils",
+        **{c: f"median_county_{c.lower()}" for c in demographic_cols},
     }
 
     region_level_columns_to_aggregate = {
@@ -138,8 +194,79 @@ def join_tables(df: pl.DataFrame, school: pl.DataFrame, district: pl.DataFrame):
         "NUMBER_OF_COUNSELORS": "region_level_median_number_of_counselors",
         "NUMBER_OF_SOCIAL_WORKERS": "region_level_median_number_of_social_workers",
         "N_PUPILS": "region_level_median_number_of_pupils",
+        **{c: f"median_region_{c.lower()}" for c in demographic_cols},
     }
 
+    state_level_columns_to_aggregate = {
+        "GRADE_1_AVERAGE_CLASS_SIZE": "state_median_grade_1_size",
+        "GRADE_2_AVERAGE_CLASS_SIZE": "state_median_grade_2_size",
+        "KINDERGARTEN_AVERAGE_CLASS_SIZE": "state_median_kindergarten_class_size",
+        "PRE_K": "state_median_pre_K_students",
+        "K": "state_median_kindergarten_students",
+        **{f"GRADE_{i:02d}": f"state_median_grade_{i}_students" for i in range(1, 13)},
+        "ATTENDANCE_RATE": "state_median_attendance_rate",
+        "TEACHER_TURNOVER_RATE": "state_median_teacher_turnover_rate",
+        "LANGUAGE_ARTS_AVERAGE_CLASS_SIZE": "state_median_language_class_size",
+        "MATHEMATICS_AVERAGE_CLASS_SIZE": "state_median_math_class_size",
+        "SCIENCE_AVERAGE_CLASS_SIZE": "state_median_science_class_size",
+        "HISTORY_GOVERNMENT_AND_GEOGRAPHY_AVERAGE_CLASS_SIZE": "state_median_class_size",
+        "PERCENT_FREE_LUNCH": "state_median_percent_free_lunch",
+        "PERCENT_REDUCED_LUNCH": "state_median_reduced_lunch",
+        "NUMBER_OF_TEACHERS": "state_median_number_of_teachers",
+        "NUMBER_OF_COUNSELORS": "state_median_number_of_counselors",
+        "NUMBER_OF_SOCIAL_WORKERS": "state_median_number_of_social_workers",
+        "N_PUPILS": "state_median_number_of_pupils",
+        **{c: f"median_state_{c.lower()}" for c in demographic_cols},
+    }
+
+    district_level_columns_to_aggregate = {
+        "GRADE_1_AVERAGE_CLASS_SIZE": "district_level_median_grade_1_size",
+        "GRADE_2_AVERAGE_CLASS_SIZE": "district_level_median_grade_2_size",
+        "KINDERGARTEN_AVERAGE_CLASS_SIZE": "district_level_median_kindergarten_class_size",
+        "PRE_K": "district_level_median_pre_K_students",
+        "K": "district_level_median_kindergarten_students",
+        **{
+            f"GRADE_{i:02d}": f"district_level_median_grade_{i}_students"
+            for i in range(1, 13)
+        },
+        "ATTENDANCE_RATE": "district_level_median_attendance_rate",
+        "TEACHER_TURNOVER_RATE": "district_level_median_teacher_turnover_rate",
+        "LANGUAGE_ARTS_AVERAGE_CLASS_SIZE": "district_level_median_language_class_size",
+        "MATHEMATICS_AVERAGE_CLASS_SIZE": "district_level_median_math_class_size",
+        "SCIENCE_AVERAGE_CLASS_SIZE": "district_level_median_science_class_size",
+        "HISTORY_GOVERNMENT_AND_GEOGRAPHY_AVERAGE_CLASS_SIZE": "district_level_median_class_size",
+        "PERCENT_FREE_LUNCH": "district_level_median_percent_free_lunch",
+        "PERCENT_REDUCED_LUNCH": "district_level_median_reduced_lunch",
+        "NUMBER_OF_TEACHERS": "district_level_median_number_of_teachers",
+        "NUMBER_OF_COUNSELORS": "district_level_median_number_of_counselors",
+        "NUMBER_OF_SOCIAL_WORKERS": "district_level_median_number_of_social_workers",
+        "N_PUPILS": "district_level_median_number_of_pupils",
+    }
+
+    macro_region_level_columns_to_aggregate = {
+        "GRADE_1_AVERAGE_CLASS_SIZE": "macro_region_level_median_grade_1_size",
+        "GRADE_2_AVERAGE_CLASS_SIZE": "macro_region_level_median_grade_2_size",
+        "KINDERGARTEN_AVERAGE_CLASS_SIZE": "macro_region_level_median_kindergarten_class_size",
+        "PRE_K": "macro_region_level_median_pre_K_students",
+        "K": "macro_region_level_median_kindergarten_students",
+        **{
+            f"GRADE_{i:02d}": f"macro_region_level_median_grade_{i}_students"
+            for i in range(1, 13)
+        },
+        "ATTENDANCE_RATE": "macro_region_level_median_attendance_rate",
+        "TEACHER_TURNOVER_RATE": "macro_region_level_median_teacher_turnover_rate",
+        "LANGUAGE_ARTS_AVERAGE_CLASS_SIZE": "macro_region_level_median_language_class_size",
+        "MATHEMATICS_AVERAGE_CLASS_SIZE": "macro_region_level_median_math_class_size",
+        "SCIENCE_AVERAGE_CLASS_SIZE": "macro_region_level_median_science_class_size",
+        "HISTORY_GOVERNMENT_AND_GEOGRAPHY_AVERAGE_CLASS_SIZE": "macro_region_level_median_class_size",
+        "PERCENT_FREE_LUNCH": "macro_region_level_median_percent_free_lunch",
+        "PERCENT_REDUCED_LUNCH": "macro_region_level_median_reduced_lunch",
+        "NUMBER_OF_TEACHERS": "macro_region_level_median_number_of_teachers",
+        "NUMBER_OF_COUNSELORS": "macro_region_level_median_number_of_counselors",
+        "NUMBER_OF_SOCIAL_WORKERS": "macro_region_level_median_number_of_social_workers",
+        "N_PUPILS": "macro_region_level_median_number_of_pupils",
+        **{c: f"median_macro_region_{c.lower()}" for c in demographic_cols},
+    }
     x_per_y_unique_aggs = [
         ("DISTRICT", "SCHOOL", "total_schools_per_district"),
         ("COUNTY", "SCHOOL", "total_schools_per_county"),
@@ -181,51 +308,13 @@ def join_tables(df: pl.DataFrame, school: pl.DataFrame, district: pl.DataFrame):
                 .agg(pl.col(child_key).sum().alias(parent_key))
             )
 
-    imputer = KNNImputer(
-        n_neighbors=5,
-        weights="distance",
-        add_indicator=True,
+    school_imputed = school  # oops
+
+    school_imputed = school_imputed.join(
+        district.select(["DISTRICT"] + district_demographic_cols),
+        on="DISTRICT",
+        how="left",
     )
-
-    to_impute = [
-        "LANGUAGE_ARTS_AVERAGE_CLASS_SIZE",
-        "MATHEMATICS_AVERAGE_CLASS_SIZE",
-        "SCIENCE_AVERAGE_CLASS_SIZE",
-        "HISTORY_GOVERNMENT_AND_GEOGRAPHY_AVERAGE_CLASS_SIZE",
-        "LOCAL_FUNDING_PER_PUPIL",
-        "FEDERAL_FUNDING_PER_PUPIL",
-        "ATTENDANCE_RATE",
-        "N_PUPILS",
-        "TEACHER_TURNOVER_RATE",
-        "PERCENT_FREE_LUNCH",
-        "PERCENT_REDUCED_LUNCH",
-        "PERCENT_OF_STUDENTS_SUSPENDED",
-        "PERCENT_MALE",
-        "PERCENT_FEMALE",
-        "PERCENT_ENGLISH_LANGUAGE_LEANERS",
-        "PERCENT_AMERICAN_INDIAN",
-        "PERCENT_BLACK",
-        "PERCENT_ASIAN",
-        "PERCENT_HISPANIC",
-        "PERCENT_WHITE",
-        "PERCENT_MULTIRACIAL",
-        "PERCENT_WITH_DISABILITIES",
-        "PERCENT_ECONOMICALLY_DISADVANTAGED",
-        "PERCENT_MIGRANT",
-        "PERCENT_HOMELESS",
-        "PERCENT_IN_FOSTER_CARE",
-        "PERCENT_PARENT_ARMED_FORCES",
-    ]
-    school_imputed = imputer.fit_transform(school.select(to_impute).to_numpy())
-    col_names = to_impute + [f"missingindicator_{c}" for c in to_impute]
-
-    school_imputed = school.with_columns(
-        [
-            pl.Series(name=col, values=school_imputed[:, i])
-            for i, col in enumerate(col_names)
-        ]
-    )
-
     res = (
         df.join(school_imputed, on="SCHOOL", how="left")
         .join(district, on="DISTRICT", how="left")
@@ -239,26 +328,74 @@ def join_tables(df: pl.DataFrame, school: pl.DataFrame, district: pl.DataFrame):
         )
     )
 
+    res = res.with_columns(pl.lit(1).alias("_state_key"))
+
+    for col, alias in state_level_columns_to_aggregate.items():
+        agg_df = df_state_level_gb(school_imputed, col, alias)
+        res = res.join(agg_df, on="_state_key", how="left")
+    res = res.drop("_state_key")
+
     for key, tbl in funding_tables.items():
         level = key.split("_per_")[1]
         join_col = level.upper()
         res = res.join(tbl, on=join_col, how="left")
 
     for group_col, count_col, alias in x_per_y_unique_aggs:
-        agg_df = df_total_unique_x_per_y(school, group_col, count_col, alias)
+        agg_df = df_total_unique_x_per_y(school_imputed, group_col, count_col, alias)
         res = res.join(agg_df, on=group_col, how="left")
 
     for col, alias in district_type_level_columns_to_aggregate.items():
-        agg_df = df_district_type_level_gb(school, col, alias)
-        res = res.join(agg_df, on=["REGION", "COUNTY", "DISTRICT_TYPE"], how="left")
+        agg_df = df_district_type_level_gb(school_imputed, col, alias)
+        res = res.join(agg_df, on=["DISTRICT_TYPE"], how="left")
 
     for col, alias in county_level_columns_to_aggregate.items():
-        agg_df = df_county_level_gb(school, col, alias)
-        res = res.join(agg_df, on=["REGION", "COUNTY"], how="left")
+        agg_df = df_county_level_gb(school_imputed, col, alias)
+        res = res.join(agg_df, on=["COUNTY"], how="left")
 
     for col, alias in region_level_columns_to_aggregate.items():
-        agg_df = df_region_level_gb(school, col, alias)
+        agg_df = df_region_level_gb(school_imputed, col, alias)
         res = res.join(agg_df, on=["REGION"], how="left")
+
+    for col, alias in district_level_columns_to_aggregate.items():
+        agg_df = df_district_level_gb(school_imputed, col, alias)
+        res = res.join(agg_df, on=["DISTRICT"], how="left")
+
+    for col, alias in macro_region_level_columns_to_aggregate.items():
+        agg_df = df_macro_region_level_gb(school_imputed, col, alias)
+        res = res.join(agg_df, on=["MACRO_REGION"], how="left")
+
+    res = res.with_columns(
+        district_level_median_teacher_turnover_rate=pl.col(
+            "district_level_median_teacher_turnover_rate"
+        )
+        .fill_null(pl.col("county_median_teacher_turnover_rate"))
+        .fill_null(pl.col("region_level_median_teacher_turnover_rate"))
+        .fill_null(pl.col("macro_region_level_median_teacher_turnover_rate"))
+    )
+    res = res.with_columns(
+        district_type_level_median_teacher_turnover_rate=pl.col(
+            "district_type_level_median_teacher_turnover_rate"
+        )
+        .fill_null(pl.col("county_median_teacher_turnover_rate"))
+        .fill_null(pl.col("region_level_median_teacher_turnover_rate"))
+        .fill_null(pl.col("macro_region_level_median_teacher_turnover_rate"))
+    )
+
+    res = res.with_columns(
+        region_level_median_teacher_turnover_rate=pl.col(
+            "region_level_median_teacher_turnover_rate"
+        ).fill_null(pl.col("macro_region_level_median_teacher_turnover_rate"))
+    )
+
+    school_assessment_n_rows = (
+        res.group_by(["SCHOOL", "ASSESSMENT_NAME"])
+        .len()
+        .rename({"len": "num_tests_for_school"})
+    )
+
+    res = res.join(
+        school_assessment_n_rows, on=["SCHOOL", "ASSESSMENT_NAME"], how="left"
+    )
 
     return res
 
@@ -298,9 +435,26 @@ def get_data(cached=True):
             .otherwise(0)
         )
         .with_columns(
+            INFORMATION_MISSING=pl.when(
+                (pl.sum_horizontal(pl.all().is_null()).gt(0))
+                & (pl.sum_horizontal(pl.all().is_null()).le(5))
+            )
+            .then(pl.lit(1))
+            .otherwise(0)
+        )
+        .with_columns(
             INFORMATION_NOT_REPORTED_FLAG=pl.when(
                 pl.sum_horizontal(pl.all().is_null()).gt(
                     5
+                )  # quick look at the data in excel, the missing data threshold cuts off at 5 cols with NAs
+            )  # the not reported data threshold is anything greater than 5
+            .then(pl.lit(1))
+            .otherwise(0)
+        )
+        .with_columns(
+            INFORMATION_LIKELY_WITHHELD_FLAG=pl.when(
+                pl.sum_horizontal(pl.all().is_null()).gt(
+                    8
                 )  # quick look at the data in excel, the missing data threshold cuts off at 5 cols with NAs
             )  # the not reported data threshold is anything greater than 5
             .then(pl.lit(1))
@@ -375,7 +529,124 @@ def get_data(cached=True):
     ]
 
     school = school.with_columns(has_pupils)
+    school = school.with_columns(
+        pl.col("DISTRICT_TYPE")
+        .cast(pl.String)
+        .eq("Charter School")
+        .cast(pl.Int8)
+        .alias("is_charter")
+    )
 
+    school = school.with_columns(
+        is_high_need=pl.when(
+            pl.col("DISTRICT_TYPE")
+            .cast(pl.String)
+            .is_in(["High-Need Rural", "High-Need Urban/Suburban"])
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0))
+    ).with_columns(
+        is_rural=pl.when(pl.col("DISTRICT_TYPE").eq("High-Need Rural"))
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0))
+    )
+    school = school.with_columns(
+        is_low_need=pl.when(pl.col("DISTRICT_TYPE").cast(pl.String).is_in(["Low Need"]))
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        is_aveage_need=pl.when(
+            pl.col("DISTRICT_TYPE").cast(pl.String).is_in(["Average Need"])
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+    )
+
+    school = school.with_columns(
+        is_large_city=pl.when(
+            pl.col("DISTRICT_TYPE").cast(pl.String).is_in(["NYC", "Other Large City"])
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        is_charter_school=pl.when(
+            pl.col("DISTRICT_TYPE").cast(pl.String).is_in(["Charter School"])
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+    )
+
+    MACRO_REGION = {
+        "New York City": "downstate_urban",
+        "Long Island": "downstate_suburb",
+        "Hudson Valley": "downstate_suburb",
+        "Western New York": "upstate_corridor",
+        "Finger Lakes": "upstate_corridor",
+        "Central New York": "upstate_corridor",
+        "Mohawk Valley": "upstate_corridor",
+        "Capital District, New York": "upstate_corridor",
+        "Southern Tier": "rural_fringe",
+        "North Country (New York)": "rural_fringe",
+    }
+
+    school = (
+        school.with_columns(
+            pl.col("REGION")
+            .cast(pl.String)
+            .replace_strict(MACRO_REGION)
+            .cast(pl.Categorical)
+            .alias("MACRO_REGION")
+        )
+        .with_columns(
+            is_rural=pl.when(pl.col("MACRO_REGION").eq("rural_fringe"))
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_upstate=pl.when(
+                (pl.col("MACRO_REGION").cast(pl.String).str.contains("upstate"))
+                | (
+                    pl.col("REGION")
+                    .cast(pl.String)
+                    .str.contains("North Country (New York)")
+                )
+                | (pl.col("REGION").cast(pl.String).str.contains("Southern Tier"))
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_down=pl.when(
+                (pl.col("MACRO_REGION").cast(pl.String).str.contains("downstate"))
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+    ).with_columns(
+        is_nyc=pl.when(pl.col("REGION").eq("New York City"))
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0))
+    )
+
+    macro_region_pupil_share = school.group_by("MACRO_REGION").agg(
+        (pl.col("N_PUPILS").sum() / 2_412_693).alias(
+            "macro_region_share_of_state_pupils"
+        )  # 2412693 calculated by hand
+    )
+    district_pupil_share = school.group_by("DISTRICT").agg(
+        (pl.col("N_PUPILS").sum() / 2_412_693).alias("district_share_of_state_pupils")
+    )
+    district_type_pupil_share = school.group_by("DISTRICT_TYPE").agg(
+        (pl.col("N_PUPILS").sum() / 2_412_693).alias(
+            "district_type_share_of_state_pupils"
+        )
+    )
+
+    county_pupil_share = school.group_by("COUNTY").agg(
+        (pl.col("N_PUPILS").sum() / 2_412_693).alias("county_share_of_state_pupils")
+    )
+
+    region_pupil_share = school.group_by("REGION").agg(
+        (pl.col("N_PUPILS").sum() / 2_412_693).alias("region_share_of_state_pupils")
+    )
     min_grade = pl.min_horizontal(
         *[
             pl.when(pl.col(f"has_{col}")).then(pl.lit(level)).otherwise(pl.lit(None))
@@ -415,7 +686,7 @@ def get_data(cached=True):
         .then(pl.lit("secondary"))
         .otherwise(pl.lit("other"))
         .alias("school_type")
-    )
+    ).with_columns((pl.col("N_PUPILS") / 2_412_693).alias("share_of_state_pupils"))
 
     district = pl.read_csv(
         "https://michael-weylandt.com/STA9890/competition_data/district_covariates.csv",
@@ -495,25 +766,759 @@ def get_data(cached=True):
         )
         return df
 
-    X_train = add_funding_ratio_cols(X_train)
+    X_train = (
+        (
+            (
+                add_funding_ratio_cols(X_train)
+                .with_columns(
+                    is_regent=pl.when(
+                        pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Regent")
+                    )
+                    .then(pl.lit(1))
+                    .otherwise(pl.lit(0))
+                )
+                .with_columns(
+                    is_agg_level_stat=pl.when(
+                        pl.col("SUBGROUP_NAME").eq("All Students")
+                    )
+                    .then(pl.lit(1))
+                    .otherwise(pl.lit(0))
+                )
+            )
+            .with_columns(
+                is_ela=pl.when(
+                    (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("ELA"))
+                    | (
+                        pl.col("ASSESSMENT_NAME")
+                        .cast(pl.String)
+                        .str.contains("English")
+                    )
+                )
+                .then(pl.lit(1))
+                .otherwise(pl.lit(0))
+            )
+            .with_columns(
+                is_math=pl.when(
+                    (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Math"))
+                    | (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("MATH"))
+                    | (
+                        pl.col("ASSESSMENT_NAME")
+                        .cast(pl.String)
+                        .str.contains("Geometry")
+                    )
+                    | (
+                        pl.col("ASSESSMENT_NAME")
+                        .cast(pl.String)
+                        .str.contains("Algebra")
+                    )
+                )
+                .then(pl.lit(1))
+                .otherwise(0)
+            )
+        )
+        .with_columns(
+            is_common_core=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Common Core")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_science=pl.when(
+                (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Science"))
+                | (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Phy Set"))
+                | (
+                    pl.col("ASSESSMENT_NAME")
+                    .cast(pl.String)
+                    .str.contains("Living Environment")
+                )
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_eight=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("8")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_seven=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("7")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_six=pl.when(pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("6"))
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_five=pl.when(pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("5"))
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_four=pl.when(pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("4"))
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_three=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("3")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_combined=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Combined")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_history=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("History")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_algebra=pl.when(
+                (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Algebra"))
+            )
+            .then(pl.lit(1))
+            .otherwise(0)
+        )
+        .with_columns(
+            is_algebra_2=pl.when(
+                (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("II"))
+            )
+            .then(pl.lit(1))
+            .otherwise(0)
+        )
+        .with_columns(
+            is_physics=pl.when(
+                (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Physics"))
+            )
+            .then(pl.lit(1))
+            .otherwise(0)
+        )
+        .with_columns(
+            is_chem=pl.when(
+                (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Chemistry"))
+            )
+            .then(pl.lit(1))
+            .otherwise(0)
+        )
+    )
+
     y_train = train.select(pl.col("PERCENT_PROFICIENT"))
-    X_train = X_train.select(pl.exclude("PERCENT_PROFICIENT"))
 
     X_pred = join_tables(test, school, district)
-    X_pred = add_funding_ratio_cols(X_pred)
+    X_pred = (
+        (
+            add_funding_ratio_cols(X_pred)
+            .with_columns(
+                is_regent=pl.when(
+                    pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Regent")
+                )
+                .then(pl.lit(1))
+                .otherwise(pl.lit(0))
+            )
+            .with_columns(
+                is_agg_level_stat=pl.when(pl.col("SUBGROUP_NAME").eq("All Students"))
+                .then(pl.lit(1))
+                .otherwise(pl.lit(0))
+            )
+            .with_columns(
+                is_ela=pl.when(
+                    (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("ELA"))
+                    | (
+                        pl.col("ASSESSMENT_NAME")
+                        .cast(pl.String)
+                        .str.contains("English")
+                    )
+                )
+                .then(pl.lit(1))
+                .otherwise(pl.lit(0))
+            )
+            .with_columns(
+                is_math=pl.when(
+                    (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Math"))
+                    | (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("MATH"))
+                    | (
+                        pl.col("ASSESSMENT_NAME")
+                        .cast(pl.String)
+                        .str.contains("Geometry")
+                    )
+                    | (
+                        pl.col("ASSESSMENT_NAME")
+                        .cast(pl.String)
+                        .str.contains("Algebra")
+                    )
+                )
+                .then(pl.lit(1))
+                .otherwise(0)
+            )
+            .with_columns(
+                is_math=pl.when(
+                    (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Algebra"))
+                )
+                .then(pl.lit(1))
+                .otherwise(0)
+            )
+            .with_columns(
+                is_common_core=pl.when(
+                    pl.col("ASSESSMENT_NAME")
+                    .cast(pl.String)
+                    .str.contains("Common Core")
+                )
+                .then(pl.lit(1))
+                .otherwise(pl.lit(0))
+            )
+            .with_columns(
+                is_algebra_2=pl.when(
+                    (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("II"))
+                )
+                .then(pl.lit(1))
+                .otherwise(0)
+            )
+            .with_columns(
+                is_algebra=pl.when(
+                    (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Algebra"))
+                )
+                .then(pl.lit(1))
+                .otherwise(0)
+            )
+            .with_columns(
+                is_science=pl.when(
+                    (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Science"))
+                    | (
+                        pl.col("ASSESSMENT_NAME")
+                        .cast(pl.String)
+                        .str.contains("Phy Set")
+                    )
+                    | (
+                        pl.col("ASSESSMENT_NAME")
+                        .cast(pl.String)
+                        .str.contains("Living Environment")
+                    )
+                )
+                .then(pl.lit(1))
+                .otherwise(pl.lit(0))
+            )
+        )
+        .with_columns(
+            is_combined=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Combined")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_eight=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("8")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_seven=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("7")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_six=pl.when(pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("6"))
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_five=pl.when(pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("5"))
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_four=pl.when(pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("4"))
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_three=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("3")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_history=pl.when(
+                pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("History")
+            )
+            .then(pl.lit(1))
+            .otherwise(pl.lit(0))
+        )
+        .with_columns(
+            is_physics=pl.when(
+                (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Physics"))
+            )
+            .then(pl.lit(1))
+            .otherwise(0)
+        )
+        .with_columns(
+            is_chem=pl.when(
+                (pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("Chemistry"))
+            )
+            .then(pl.lit(1))
+            .otherwise(0)
+        )
+    )
+
+    # === Estimated SE: per-row, using district mean as p_est and the row's own N_STUDENTS ===
+    district_p_est = X_train.group_by("DISTRICT").agg(
+        pl.col("PERCENT_PROFICIENT").mean().alias("district_p_est")
+    )
+    X_train = X_train.join(district_p_est, on="DISTRICT", how="left").with_columns(
+        estimated_se=(
+            (
+                pl.col("district_p_est")
+                * (100 - pl.col("district_p_est"))
+                / pl.max_horizontal(pl.col("N_STUDENTS"), pl.lit(1))
+            ).sqrt()
+            / 100
+        ),
+        log1p_n_students=pl.col("N_STUDENTS").log1p(),
+    )
+    X_pred = X_pred.join(district_p_est, on="DISTRICT", how="left").with_columns(
+        estimated_se=(
+            (
+                pl.col("district_p_est")
+                * (100 - pl.col("district_p_est"))
+                / pl.max_horizontal(pl.col("N_STUDENTS"), pl.lit(1))
+            ).sqrt()
+            / 100
+        ),
+        log1p_n_students=pl.col("N_STUDENTS").log1p(),
+    )
+
+    # === Drop helper column and the target before saving ===
+    X_train = (
+        X_train.drop("district_p_est")
+        .drop("PERCENT_PROFICIENT")
+        .fill_nan(0)
+        .fill_null(0)
+    )
+    X_pred = X_pred.drop("district_p_est").fill_nan(0).fill_null(0)
+    X_train = X_train.select(pl.exclude("^.*right$"))
+    X_pred = X_pred.select(pl.exclude("^.*right$"))
     X_pred_id = test.select(pl.col("ASSESSMENT_ID"))
-    num_cols = [
-        c
-        for c in X_train.columns
-        if c not in cat_set
-        and not c.startswith("has_")
-        and X_train[c].dtype not in (pl.Boolean, pl.Utf8, pl.Categorical)
+
+    # autofeat columns
+    X_train = X_train.with_columns(
+        [
+            pl.col("PERCENT_ECONOMICALLY_DISADVANTAGED")
+            .pow(2)
+            .alias("PERCENT_ECONOMICALLY_DISADVANTAGED__2"),
+            pl.col("PERCENT_HOMELESS").pow(2).alias("PERCENT_HOMELESS__2"),
+            pl.col("PERCENT_HOMELESS").pow(3).alias("PERCENT_HOMELESS__3"),
+            pl.col("PERCENT_OF_STUDENTS_SUSPENDED")
+            .pow(2)
+            .alias("PERCENT_OF_STUDENTS_SUSPENDED__2"),
+            pl.col("PERCENT_ENGLISH_LANGUAGE_LEANERS")
+            .pow(2)
+            .alias("PERCENT_ENGLISH_LANGUAGE_LEANERS__2"),
+            pl.col("GRADE_2_AVERAGE_CLASS_SIZE")
+            .pow(2)
+            .alias("GRADE_2_AVERAGE_CLASS_SIZE__2"),
+            pl.col("student_teacher_ratio").pow(3).alias("student_teacher_ratio__3"),
+            pl.col("fed_funding_per_school")
+            .sqrt()
+            .alias("sqrt_fed_funding_per_school"),
+            pl.col("county_median_reduced_lunch")
+            .exp()
+            .alias("exp_county_median_reduced_lunch"),
+            pl.col("num_tests_for_school").exp().alias("exp_num_tests_for_school"),
+            pl.col("NUMBER_OF_SOCIAL_WORKERS")
+            .pow(3)
+            .alias("NUMBER_OF_SOCIAL_WORKERS__3"),
+            pl.col("median_district_percent_dropout")
+            .pow(3)
+            .alias("median_district_percent_dropout__3"),
+            pl.col("N_STUDENTS").pow(2).alias("N_STUDENTS__2"),
+            pl.when(
+                pl.col("N_PUPILS").is_not_null()
+                & pl.col("N_PUPILS").gt(0)
+                & pl.col("N_STUDENTS").is_not_null()
+            )
+            .then(pl.col("N_STUDENTS").truediv(pl.col("N_PUPILS")))
+            .alias("size_of_group"),
+        ]
+    ).with_columns(
+        size_of_3=pl.when(
+            (pl.col("is_three").eq(1))
+            & pl.col("GRADE_03").is_not_null()
+            & pl.col("GRADE_03").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_03"))),
+        size_of_4=pl.when(
+            (pl.col("is_four").eq(1))
+            & pl.col("GRADE_04").is_not_null()
+            & pl.col("GRADE_04").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_04"))),
+        size_of_5=pl.when(
+            (pl.col("is_five").eq(1))
+            & pl.col("GRADE_05").is_not_null()
+            & pl.col("GRADE_05").gt(0)
+        )
+        .then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_05")))
+        .otherwise(pl.lit(0)),
+        size_of_6=pl.when(
+            (pl.col("is_six").eq(1))
+            & pl.col("GRADE_06").is_not_null()
+            & pl.col("GRADE_06").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_06"))),
+        size_of_7=pl.when(
+            (pl.col("is_seven").eq(1))
+            & pl.col("GRADE_07").is_not_null()
+            & pl.col("GRADE_07").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_07"))),
+        size_of_8=pl.when(
+            (pl.col("is_eight").eq(1))
+            & pl.col("GRADE_08").is_not_null()
+            & pl.col("GRADE_08").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_08"))),
+        size_of_regent=pl.when(
+            (pl.col("is_regent").eq(1))
+            & pl.col("GRADE_09").is_not_null()
+            & pl.col("GRADE_10").is_not_null()
+            & pl.col("GRADE_11").is_not_null()
+            & pl.col("GRADE_12").is_not_null()
+            & (
+                pl.col("GRADE_09")
+                .add(pl.col("GRADE_10"))
+                .add(pl.col("GRADE_11"))
+                .add(pl.col("GRADE_12"))
+            ).gt(0)
+        ).then(
+            pl.col("N_STUDENTS").truediv(
+                pl.col("GRADE_09")
+                .add(pl.col("GRADE_10"))
+                .add(pl.col("GRADE_11"))
+                .add(pl.col("GRADE_12"))
+            )
+        ),
+        high_need_regents=pl.when(
+            (pl.col("is_high_need").eq(1)) & (pl.col("is_regent").eq(1))
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        nyc_regents=pl.when((pl.col("is_nyc").eq(1)) & (pl.col("is_regent").eq(1)))
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        is_large_city_regents=pl.when(
+            (pl.col("is_large_city").eq(1)) & (pl.col("is_regent").eq(1))
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        is_average_needs_regent=pl.when(
+            (pl.col("DISTRICT_TYPE").eq("Average Need")) & (pl.col("is_regent").eq(1))
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        high_need_common_core=pl.when(
+            (pl.col("is_high_need").eq(1)) & (pl.col("is_common_core").eq(1))
+        ).then(pl.lit(1)),
+        is_all_students_regent=pl.when(
+            (pl.col("SUBGROUP_NAME").eq("All Students")) & (pl.col("is_regent").eq(1))
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        double_high_needs=pl.when(
+            (pl.col("is_high_need").eq(1))
+            & (pl.col("SUBGROUP_NAME").eq("Economically Disadvantaged"))
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        is_history=pl.when(
+            pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("History")
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+    )
+
+    X_pred = X_pred.with_columns(
+        [
+            pl.col("PERCENT_ECONOMICALLY_DISADVANTAGED")
+            .pow(2)
+            .alias("PERCENT_ECONOMICALLY_DISADVANTAGED__2"),
+            pl.col("PERCENT_HOMELESS").pow(2).alias("PERCENT_HOMELESS__2"),
+            pl.col("PERCENT_HOMELESS").pow(3).alias("PERCENT_HOMELESS__3"),
+            pl.col("PERCENT_OF_STUDENTS_SUSPENDED")
+            .pow(2)
+            .alias("PERCENT_OF_STUDENTS_SUSPENDED__2"),
+            pl.col("PERCENT_ENGLISH_LANGUAGE_LEANERS")
+            .pow(2)
+            .alias("PERCENT_ENGLISH_LANGUAGE_LEANERS__2"),
+            pl.col("GRADE_2_AVERAGE_CLASS_SIZE")
+            .pow(2)
+            .alias("GRADE_2_AVERAGE_CLASS_SIZE__2"),
+            pl.col("student_teacher_ratio").pow(3).alias("student_teacher_ratio__3"),
+            pl.col("fed_funding_per_school")
+            .sqrt()
+            .alias("sqrt_fed_funding_per_school"),
+            pl.col("county_median_reduced_lunch")
+            .exp()
+            .alias("exp_county_median_reduced_lunch"),
+            pl.col("num_tests_for_school").exp().alias("exp_num_tests_for_school"),
+            pl.col("NUMBER_OF_SOCIAL_WORKERS")
+            .pow(3)
+            .alias("NUMBER_OF_SOCIAL_WORKERS__3"),
+            pl.col("median_district_percent_dropout")
+            .pow(3)
+            .alias("median_district_percent_dropout__3"),
+            pl.col("N_STUDENTS").pow(2).alias("N_STUDENTS__2"),
+            pl.when(
+                pl.col("N_PUPILS").is_not_null()
+                & pl.col("N_PUPILS").gt(0)
+                & pl.col("N_STUDENTS").is_not_null()
+            )
+            .then(pl.col("N_STUDENTS").truediv(pl.col("N_PUPILS")))
+            .otherwise(pl.lit(0))
+            .alias("size_of_group"),
+        ]
+    ).with_columns(
+        size_of_3=pl.when(
+            (pl.col("is_three").eq(1))
+            & pl.col("GRADE_03").is_not_null()
+            & pl.col("GRADE_03").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_03"))),
+        size_of_4=pl.when(
+            (pl.col("is_four").eq(1))
+            & pl.col("GRADE_04").is_not_null()
+            & pl.col("GRADE_04").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_04"))),
+        size_of_5=pl.when(
+            (pl.col("is_five").eq(1))
+            & pl.col("GRADE_05").is_not_null()
+            & pl.col("GRADE_05").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_05"))),
+        size_of_6=pl.when(
+            (pl.col("is_six").eq(1))
+            & pl.col("GRADE_06").is_not_null()
+            & pl.col("GRADE_06").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_06"))),
+        size_of_7=pl.when(
+            (pl.col("is_seven").eq(1))
+            & pl.col("GRADE_07").is_not_null()
+            & pl.col("GRADE_07").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_07"))),
+        size_of_8=pl.when(
+            (pl.col("is_eight").eq(1))
+            & pl.col("GRADE_08").is_not_null()
+            & pl.col("GRADE_08").gt(0)
+        ).then(pl.col("N_STUDENTS").truediv(pl.col("GRADE_08"))),
+        size_of_regent=pl.when(
+            (pl.col("is_regent").eq(1))
+            & pl.col("GRADE_09").is_not_null()
+            & pl.col("GRADE_10").is_not_null()
+            & pl.col("GRADE_11").is_not_null()
+            & pl.col("GRADE_12").is_not_null()
+            & (
+                pl.col("GRADE_09")
+                .add(pl.col("GRADE_10"))
+                .add(pl.col("GRADE_11"))
+                .add(pl.col("GRADE_12"))
+            ).gt(0)
+        ).then(
+            pl.col("N_STUDENTS").truediv(
+                pl.col("GRADE_09")
+                .add(pl.col("GRADE_10"))
+                .add(pl.col("GRADE_11"))
+                .add(pl.col("GRADE_12"))
+            )
+        ),
+        is_history=pl.when(
+            pl.col("ASSESSMENT_NAME").cast(pl.String).str.contains("History")
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        high_need_regents=pl.when(
+            (pl.col("is_high_need").eq(1)) & (pl.col("is_regent").eq(1))
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        nyc_regents=pl.when((pl.col("is_nyc").eq(1)) & (pl.col("is_regent").eq(1)))
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        is_large_city_regents=pl.when(
+            (pl.col("is_large_city").eq(1)) & (pl.col("is_regent").eq(1))
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        is_average_needs_regent=pl.when(
+            (pl.col("DISTRICT_TYPE").eq("Average Need")) & (pl.col("is_regent").eq(1))
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        is_all_students_regent=pl.when(
+            (pl.col("SUBGROUP_NAME").eq("All Students")) & (pl.col("is_regent").eq(1))
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+        high_need_common_core=pl.when(
+            (pl.col("is_high_need").eq(1)) & (pl.col("is_common_core").eq(1))
+        ).then(pl.lit(1)),
+        double_high_needs=pl.when(
+            (pl.col("is_high_need").eq(1))
+            & (pl.col("SUBGROUP_NAME").eq("Economically Disadvantaged"))
+        )
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0)),
+    )
+    demo_cols = [
+        ("PERCENT_ECONOMICALLY_DISADVANTAGED", "percent_economically_disadvantaged"),
+        ("PERCENT_ENGLISH_LANGUAGE_LEANERS", "percent_english_language_leaners"),
+        ("PERCENT_WITH_DISABILITIES", "percent_with_disabilities"),
+        ("PERCENT_BLACK", "percent_black"),
+        ("PERCENT_HISPANIC", "percent_hispanic"),
+        ("PERCENT_WHITE", "percent_white"),
+        ("PERCENT_HOMELESS", "percent_homeless"),
+        ("PERCENT_OF_STUDENTS_SUSPENDED", "percent_of_students_suspended"),
     ]
 
-    group_cats = [c for c in categories if c in X_train.columns]
+    levels = ["district", "county", "region", "macro_region", "state"]
 
-    X_train = grouped_agg_features(X_train, group_cats, num_cols)
-    X_pred = grouped_agg_features(X_pred, group_cats, num_cols)
+    ratio_exprs = [
+        # funding composition
+        (
+            pl.col("FEDERAL_FUNDING_PER_PUPIL")
+            / (pl.col("rough_total_funding_per_pupil") + 1e-6)
+        ).alias("federal_share_of_funding"),
+        (
+            pl.col("LOCAL_FUNDING_PER_PUPIL")
+            / (pl.col("rough_total_funding_per_pupil") + 1e-6)
+        ).alias("local_share_of_funding"),
+        # attendance vs geographic peer
+        (
+            pl.col("ATTENDANCE_RATE")
+            / (pl.col("district_level_median_attendance_rate") + 1e-6)
+        ).alias("attendance_vs_district"),
+        (
+            pl.col("ATTENDANCE_RATE") / (pl.col("county_median_attendance_rate") + 1e-6)
+        ).alias("attendance_vs_county"),
+        (
+            pl.col("ATTENDANCE_RATE")
+            / (pl.col("region_level_median_attendance_rate") + 1e-6)
+        ).alias("attendance_vs_region"),
+        # turnover vs peer
+        (
+            pl.col("TEACHER_TURNOVER_RATE")
+            / (pl.col("district_level_median_teacher_turnover_rate") + 1e-6)
+        ).alias("turnover_vs_district"),
+        (
+            pl.col("TEACHER_TURNOVER_RATE")
+            / (pl.col("county_median_teacher_turnover_rate") + 1e-6)
+        ).alias("turnover_vs_county"),
+        # staffing ratios
+        (pl.col("N_PUPILS") / (pl.col("NUMBER_OF_COUNSELORS") + 1e-6)).alias(
+            "pupils_per_counselor"
+        ),
+        (pl.col("N_PUPILS") / (pl.col("NUMBER_OF_SOCIAL_WORKERS") + 1e-6)).alias(
+            "pupils_per_social_worker"
+        ),
+        # school size vs peer
+        (
+            pl.col("N_PUPILS")
+            / (pl.col("district_level_median_number_of_pupils") + 1e-6)
+        ).alias("school_size_vs_district"),
+        (pl.col("N_PUPILS") / (pl.col("county_median_number_of_pupils") + 1e-6)).alias(
+            "school_size_vs_county"
+        ),
+        # assessed fraction of school
+        (pl.col("N_STUDENTS") / (pl.col("N_PUPILS") + 1e-6)).alias(
+            "assessed_fraction_of_school"
+        ),
+        # free lunch vs peer
+        (
+            pl.col("PERCENT_FREE_LUNCH")
+            / (pl.col("district_type_level_median_percent_free_lunch") + 1e-6)
+        ).alias("free_lunch_vs_district_type"),
+        (
+            pl.col("PERCENT_FREE_LUNCH")
+            / (pl.col("county_median_percent_free_lunch") + 1e-6)
+        ).alias("free_lunch_vs_county"),
+        # funding vs geographic peer
+        (
+            pl.col("rough_total_funding_per_pupil")
+            / (pl.col("county_median_number_of_pupils") + 1e-6)
+        ).alias("funding_vs_county_size"),
+        (
+            pl.col("total_funding_per_district")
+            / (pl.col("total_funding_per_county") + 1e-6)
+        ).alias("district_share_of_county_funding"),
+    ]
+
+    # demographic vs peer ratios across all levels
+    for raw_col, slug in demo_cols:
+        for level in levels:
+            ratio_exprs.append(
+                (pl.col(raw_col) / (pl.col(f"median_{level}_{slug}") + 1e-6)).alias(
+                    f"{raw_col}_vs_{level}"
+                )
+            )
+
+    X_train = X_train.with_columns(ratio_exprs).with_columns(
+        is_econ_dis=pl.when(pl.col("SUBGROUP_NAME").eq("Economically Disadvantaged"))
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0))
+    )
+    X_pred = X_pred.with_columns(ratio_exprs).with_columns(
+        is_econ_dis=pl.when(pl.col("SUBGROUP_NAME").eq("Economically Disadvantaged"))
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0))
+    )
+
+    X_train = X_train.join(
+        macro_region_pupil_share, on="MACRO_REGION", how="left"
+    ).with_columns(inverse_mr_share=1 - pl.col("macro_region_share_of_state_pupils"))
+    X_pred = X_pred.join(
+        macro_region_pupil_share, on="MACRO_REGION", how="left"
+    ).with_columns(inverse_mr_share=1 - pl.col("macro_region_share_of_state_pupils"))
+
+    X_train = X_train.join(
+        district_pupil_share, on="DISTRICT", how="left"
+    ).with_columns(inverse_district_share=1 - pl.col("district_share_of_state_pupils"))
+    X_pred = X_pred.join(district_pupil_share, on="DISTRICT", how="left").with_columns(
+        inverse_district_share=1 - pl.col("district_share_of_state_pupils")
+    )
+
+    X_train = X_train.join(
+        district_type_pupil_share, on="DISTRICT_TYPE", how="left"
+    ).with_columns(
+        inverse_district_type_share=1 - pl.col("district_type_share_of_state_pupils")
+    )
+    X_pred = X_pred.join(
+        district_type_pupil_share, on="DISTRICT_TYPE", how="left"
+    ).with_columns(
+        inverse_district_type_share=1 - pl.col("district_type_share_of_state_pupils")
+    )
+
+    X_train = X_train.join(county_pupil_share, on="COUNTY", how="left").with_columns(
+        inverse_county_type_share=1 - pl.col("county_share_of_state_pupils")
+    )
+    X_pred = X_pred.join(county_pupil_share, on="COUNTY", how="left").with_columns(
+        inverse_county_type_share=1 - pl.col("county_share_of_state_pupils")
+    )
+
+    X_train = X_train.join(region_pupil_share, on="REGION", how="left").with_columns(
+        inverse_region_type_share=1 - pl.col("region_share_of_state_pupils")
+    )
+    X_pred = X_pred.join(region_pupil_share, on="REGION", how="left").with_columns(
+        inverse_region_type_share=1 - pl.col("region_share_of_state_pupils")
+    )
 
     if cached:
         X_pred.write_parquet("X_pred.parquet")
@@ -524,3 +1529,7 @@ def get_data(cached=True):
         return None
     else:
         return X_pred, X_train, y_train, X_pred_id
+
+
+if __name__ == "__main__":
+    get_data()

@@ -3,22 +3,42 @@ name = "sta9890"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12,<3.14"
 dependencies = [
+    "amdsmi>=7.0.2",
+    "autofeat>=2.1.1",
     "black>=26.3.1",
-    "featuretools[all,complete]>=1.31.0",
+    "catboost>=1.2.10",
+    "codecarbon>=3.2.6",
+    "fancyimpute>=0.7.0",
+    "gridstatus>=0.36.0",
     "lightgbm>=4.6.0",
     "optuna>=4.8.0",
     "optuna-dashboard>=0.20.0",
     "optuna-integration[xgboost]>=4.8.0",
     "polars[all]>=1.39.0",
-    "pytorch-tabnet2>=4.6.0",
+    "prince>=0.17.0",
+    "py-spy>=0.4.2",
     "ruff>=0.15.6",
     "scikit-learn>=1.8.0",
+    "shap>=0.51.0",
     "torch>=2.10.0",
     "torchvision>=0.25.0",
     "xgboost>=3.2.0",
 ]
+
+[tool.uv]
+no-binary-package = ["numpy", "scipy"]
+index-strategy = "unsafe-best-match"
+environments = ["python_version >= '3.12' and python_version < '3.14'"]
+
+
+[tool.uv.config-settings-package.numpy]
+setup-args = ["-Dblas=blis-mt", "-Dlapack=flame"]
+
+[tool.uv.config-settings-package.scipy]
+setup-args = ["-Dblas=blis-mt", "-Dlapack=flame"]
+
 
 [tool.uv.sources]
 torch = { index = "torch_index" }
@@ -26,4 +46,7 @@ torchvision = { index = "torch_index" }
 
 [[tool.uv.index]]
 name = "torch_index"
-url = "https://download.pytorch.org/whl/rocm7.1"
+url = "https://download.pytorch.org/whl/rocm7.2"
+
+
+

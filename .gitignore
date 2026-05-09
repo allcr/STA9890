@@ -23,3 +23,29 @@ optuna.db
 *.parquet
 *.gz
 /.auctex-auto/
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+/.idea/
+.Rproj.user
+
+#Other
+optuna.db
+*.db
+*.rds
+*.json
+*.csv
+*.org
+*.log
+*.txt
+*.parquet
+*.gz
+/.auctex-auto/

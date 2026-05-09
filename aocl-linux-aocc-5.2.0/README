@@ -1,0 +1,42 @@
+################################################################################
+INSTALLING AOCL BINARY PACKAGES
+################################################################################
+
+- Use the command tar -xvf <aocl-linux-<compiler>-5.1.0.tar.gz> to untar the package.
+
+- Run the ./install.sh in <aocl-linux-<compiler>-5.1.0 to install the AOCL package 
+   (all libraries) to the default INSTALL_PATH: /home/<username>/aocl/5.1.0/<compiler>,
+   where the compiler value is aocc or gcc.
+   ./install.sh
+   - Use -h option for "USAGE" help to be printed with all the supported options.
+
+- To install the AOCL package in a custom location, use the installer with the option:
+   -t <CUSTOM_PATH>.
+   For example, ./install.sh -t /home/<username>.
+
+- Default behavior:
+      - fftw is installed by default.
+      - fftz will ONLY be installed if explicitly requested via -l fftz.
+      - fftw and fftz cannot be installed together.
+      - If you try to install both, you will get:
+        Error: 'fftw' and 'fftz' cannot be installed simultaneously. Install only one of them, 
+                and when installing each individually, choose a different target directory.
+    
+       Examples:
+      ./install.sh                        # installs default set (includes fftw)
+      ./install.sh -l fftw fftz           # Error: cannot install both fftw and fftz together
+      ./install.sh -l blis libflame fftz -i ilp64
+
+- The master installer can also be used to install individual library out of the master package.
+    – To install a specific library, use the option -l followed by the library name.
+      For example, ./install.sh -l blis
+      The library names that have been used are da, fftw, libm, crypto, libmem, 
+      blis, libflame, scalapack, rng, secrng, sparse, fftz, dlp, compression and utils.
+    – You can also install the individual library in a path of your choice.
+      For example, ./install.sh -t /home/amd -l blis
+
+- To change the default library path to ILP64 / LP64
+    – cd <AOCL INSTALL PATH>
+    – bash set_aocl_interface_symlink.sh <ilp64/lp64>
+
+Refer to the AOCL User Guide in "Chapter 3 - Installing AOCL" for detailed steps.
