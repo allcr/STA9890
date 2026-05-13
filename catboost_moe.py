@@ -59,8 +59,6 @@ LOGS_DIR = Path("logs")
 LOGS_DIR.mkdir(exist_ok=True)
 PARAMS_DIR = Path("best_params_catboost")
 PARAMS_DIR.mkdir(exist_ok=True)
-WARMSTART_DIR = Path("warmstart_markers_catboost")
-WARMSTART_DIR.mkdir(exist_ok=True)
 EXPERTS_DIR = Path("fitted_experts_catboost")
 EXPERTS_DIR.mkdir(exist_ok=True)
 ARTIFACTS_PATH = Path("catboost_moe_artifacts.npz")
@@ -389,9 +387,10 @@ def tune_one(tier, name, n_trials=None):
         pruner=MedianPruner(n_startup_trials=2, n_warmup_steps=2),
     )
 
-    marker = WARMSTART_DIR / f"{tier}_{_safe(name)}.done"
-    if not marker.exists():
-        # Single warm-start: the library defaults
+    # Warm-start gating: source of truth is the study itself, not a sidecar
+    # marker file. If the study is fresh (zero trials), enqueue defaults so
+    # trial 0 is always the library default — even after journal wipes.
+    if len(study.trials) == 0:
         study.enqueue_trial(
             {
                 "learning_rate": 0.03,
@@ -400,10 +399,15 @@ def tune_one(tier, name, n_trials=None):
                 "min_data_in_leaf": 1,
                 "random_strength": 1.0,
                 "bagging_temperature": 1.0,
-            }
+            },
+            skip_if_exists=True,
         )
-        marker.write_text("enqueued defaults warm-start\n")
-        print(f"[{tier}/{name}] enqueued library defaults as first trial")
+        print(f"[{tier}/{name}] enqueued library defaults as first trial (fresh study)")
+    else:
+        print(
+            f"[{tier}/{name}] study has {len(study.trials)} existing trials, "
+            f"skipping warm-start"
+        )
 
     study.optimize(
         objective, n_trials=n_trials, show_progress_bar=True, gc_after_trial=True
@@ -754,7 +758,6 @@ def stack(force=False):
 
 
 def _save_diagnostics(tiers, oof_global, resid, keys, test_stack_arrays, version_tag):
-    version_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
     diagnostic_path = Path(f"catboost_diagnostic_{version_tag}.json")
     diagnostic = {
         "run_timestamp": datetime.datetime.now().isoformat(),

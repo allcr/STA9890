@@ -57,8 +57,6 @@ LOGS_DIR = Path("logs")
 LOGS_DIR.mkdir(exist_ok=True)
 PARAMS_DIR = Path("best_params_lightgbm")
 PARAMS_DIR.mkdir(exist_ok=True)
-WARMSTART_DIR = Path("warmstart_markers_lightgbm")
-WARMSTART_DIR.mkdir(exist_ok=True)
 EXPERTS_DIR = Path("fitted_experts_lightgbm")
 EXPERTS_DIR.mkdir(exist_ok=True)
 ARTIFACTS_PATH = Path("lightgbm_moe_artifacts.npz")
@@ -68,16 +66,19 @@ CACHE_VERSION = 2
 
 
 # Warm-start configurations
+# Values here are LightGBM's actual library defaults. bagging_freq is kept at
+# 1 (rather than the true default of 0) because the search space lower-bounds
+# it at 1; with bagging_fraction=1.0 this is functionally identical to off.
 
 LGB_LIBRARY_DEFAULTS = {
-    "learning_rate": 0.05,
+    "learning_rate": 0.1,
     "num_leaves": 31,
     "min_gain_to_split": 0.0,
     "bagging_freq": 1,
     "bagging_fraction": 1.0,
     "feature_fraction": 1.0,
-    "lambda_l1": 1e-10,
-    "lambda_l2": 1e-10,
+    "lambda_l1": 0.0,
+    "lambda_l2": 0.0,
     "cat_smooth": 10.0,
     "cat_l2": 10.0,
     "min_child_samples": 20,
@@ -247,7 +248,9 @@ def search_space_for_tier(tier, trial, n_rows):
         "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.103, log=True),
         "num_leaves": trial.suggest_int("num_leaves", 8, 1024),
         "min_gain_to_split": trial.suggest_float(
-            "min_gain_to_split", 0.001, 200, log=True
+            "min_gain_to_split",
+            0.0,
+            200,
         ),
         "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
         "bagging_fraction": trial.suggest_float("bagging_fraction", 0.3, 1.0),
@@ -428,19 +431,23 @@ def tune_one(tier, name, n_trials=None):
         sampler=TPESampler(seed=SEED, n_startup_trials=5),
     )
 
-    marker = WARMSTART_DIR / f"{tier}_{_safe(name)}.done"
-    if not marker.exists():
+    # Warm-start gating: source of truth is the study itself, not a sidecar
+    # marker file. If the study is fresh (zero trials), enqueue defaults so
+    # trial 0 is always the library default — even after journal wipes.
+    if len(study.trials) == 0:
         warmstarts = [_adapt_universal_warmstart(tier, n_rows)]
         if tier == "global":
             warmstarts.extend(LGB_GLOBAL_ONLY_WARMSTARTS)
         for params in warmstarts:
-            study.enqueue_trial(params)
-        marker.write_text(f"enqueued {len(warmstarts)} warm-start trials\n")
+            study.enqueue_trial(params, skip_if_exists=True)
         print(
-            f"[{tier}/{name}] enqueued {len(warmstarts)} warm-start trials (first run)"
+            f"[{tier}/{name}] enqueued {len(warmstarts)} warm-start trials (fresh study)"
         )
     else:
-        print(f"[{tier}/{name}] warm-start already done, skipping")
+        print(
+            f"[{tier}/{name}] study has {len(study.trials)} existing trials, "
+            f"skipping warm-start"
+        )
 
     study.optimize(
         objective, n_trials=n_trials, show_progress_bar=True, gc_after_trial=True
