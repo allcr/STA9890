@@ -2,16 +2,16 @@
 
 import polars as pl
 import numpy as np
-import pandas as pd
-from autofeat import AutoFeatModel
+
+
 import warnings
-from sklearn.impute import SimpleImputer
+
+import networkx as nx
 
 warnings.filterwarnings("ignore", message="codecs.open")
 
 
 categories = [
-    "ASSESSMENT_ID",
     "SCHOOL",
     "SUBGROUP_NAME",
     "ASSESSMENT_NAME",
@@ -19,8 +19,16 @@ categories = [
     "COUNTY",
     "DISTRICT_TYPE",
     "REGION",
+    "MACRO_REGION",
     "school_type",
+    "COUNTY_x_DTYPE",
+    "COUNTY_x_ASSESSMENT_NAME",
+    "DISTRICT_TYPE_x_ASSESSMENT_NAME",
+    "DISTRICT_TYPE_x_SUBGROUP_NAME",
+    "DISTRICT_TYPE_x_REGION",
+    "ASSESSMENT_NAME_x_SUBGROUP_NAME",
 ]
+
 cat_set = set(categories)
 
 school_demographic_cols = [
@@ -58,6 +66,327 @@ demographic_cols = school_demographic_cols + district_demographic_cols
 #         df = df.join(agg, on=cat, how="left")
 #     return df
 zero_meaningful_cols = set(school_demographic_cols) | set(district_demographic_cols)
+
+
+# ── NY Region adjacency graph ─────────────────────────────────────────────────
+# Hand-encoded from NY State map. Symmetric (if A is adj to B, B is adj to A).
+# Region names match your REGION column values exactly.
+
+REGION_ADJ = {
+    "New York City": ["Long Island", "Hudson Valley"],
+    "Long Island": ["New York City"],
+    "Hudson Valley": ["New York City", "Capital District, New York", "Southern Tier"],
+    "Capital District, New York": [
+        "Hudson Valley",
+        "Mohawk Valley",
+        "North Country (New York)",
+        "Southern Tier",
+    ],
+    "Mohawk Valley": [
+        "Capital District, New York",
+        "North Country (New York)",
+        "Central New York",
+        "Southern Tier",
+    ],
+    "North Country (New York)": [
+        "Capital District, New York",
+        "Mohawk Valley",
+        "Central New York",
+    ],
+    "Central New York": [
+        "Mohawk Valley",
+        "Finger Lakes",
+        "Southern Tier",
+        "North Country (New York)",
+    ],
+    "Finger Lakes": [
+        "Central New York",
+        "Western New York",
+        "Southern Tier",
+    ],
+    "Western New York": ["Finger Lakes", "Southern Tier"],
+    "Southern Tier": [
+        "Hudson Valley",
+        "Capital District, New York",
+        "Mohawk Valley",
+        "Central New York",
+        "Finger Lakes",
+        "Western New York",
+    ],
+}
+
+
+def _validate_region_adj_symmetric(adj):
+    for r, neighbors in adj.items():
+        for n in neighbors:
+            assert n in adj, f"neighbor '{n}' of '{r}' not in REGION_ADJ"
+            assert r in adj[n], f"asymmetric: '{r}' lists '{n}' but not vice versa"
+
+
+def add_geo_graph_features(X_train, X_pred, y_train, target_col="PERCENT_PROFICIENT"):
+    """
+    Level 1: leak-safe neighbor-aggregated target means (using train rows only).
+    Level 2: spectral embeddings of the region adjacency graph (no leakage, structural only).
+
+    Adds columns:
+        neighbor_mean_y, neighbor_std_y, neighbor_n_regions
+        region_emb_0, region_emb_1, region_emb_2, region_emb_3
+    """
+    _validate_region_adj_symmetric(REGION_ADJ)
+
+    # extract y
+    if isinstance(y_train, pl.DataFrame):
+        y_series = (
+            y_train[target_col]
+            if target_col in y_train.columns
+            else y_train.to_series()
+        )
+    else:
+        y_series = y_train
+    y_np = y_series.to_numpy().astype(np.float64)
+
+    # ── Level 1: leak-safe neighbor target mean ──────────────────────────────
+    # Compute per-region mean y from train only.
+    train_regions = X_train["REGION"].cast(pl.String).to_numpy()
+    region_to_ys = {}
+    for r, y in zip(train_regions, y_np):
+        region_to_ys.setdefault(r, []).append(y)
+    region_mean = {r: float(np.mean(ys)) for r, ys in region_to_ys.items()}
+    global_mean = float(np.mean(y_np))
+
+    def neighbor_stats(region):
+        """Return (mean, std, n) over neighbors of region. Falls back to global mean."""
+        neighbors = REGION_ADJ.get(region, [])
+        vals = [region_mean[n] for n in neighbors if n in region_mean]
+        if not vals:
+            return global_mean, 0.0, 0
+        return float(np.mean(vals)), float(np.std(vals)), len(vals)
+
+    # Apply to both
+    def build_neighbor_cols(regions):
+        n = len(regions)
+        means = np.empty(n, dtype=np.float64)
+        stds = np.empty(n, dtype=np.float64)
+        ns = np.empty(n, dtype=np.int32)
+        for i, r in enumerate(regions):
+            means[i], stds[i], ns[i] = neighbor_stats(r)
+        return means, stds, ns
+
+    tr_mean, tr_std, tr_n = build_neighbor_cols(train_regions)
+    pred_regions = X_pred["REGION"].cast(pl.String).to_numpy()
+    pr_mean, pr_std, pr_n = build_neighbor_cols(pred_regions)
+
+    # ── Level 2: Laplacian spectral embeddings ───────────────────────────────
+    G = nx.Graph()
+    for r in REGION_ADJ:
+        G.add_node(r)
+    for r, neighbors in REGION_ADJ.items():
+        for n in neighbors:
+            G.add_edge(r, n)
+
+    # normalized Laplacian, skip first trivial eigenvector (eigenvalue 0)
+    L = nx.normalized_laplacian_matrix(G).toarray()
+    eigvals, eigvecs = np.linalg.eigh(L)
+    K = 4  # number of embedding dims
+    node_list = list(G.nodes())
+    embeddings = eigvecs[:, 1 : K + 1]  # n_regions × K
+    emb_map = {node: embeddings[i] for i, node in enumerate(node_list)}
+
+    def build_emb_cols(regions):
+        n = len(regions)
+        out = np.zeros((n, K), dtype=np.float64)
+        for i, r in enumerate(regions):
+            if r in emb_map:
+                out[i] = emb_map[r]
+        return out
+
+    tr_emb = build_emb_cols(train_regions)
+    pr_emb = build_emb_cols(pred_regions)
+
+    # ── Attach columns ───────────────────────────────────────────────────────
+    new_train_cols = [
+        pl.Series("neighbor_mean_y", tr_mean.astype(np.float32)),
+        pl.Series("neighbor_std_y", tr_std.astype(np.float32)),
+        pl.Series("neighbor_n_regions", tr_n),
+    ]
+    new_pred_cols = [
+        pl.Series("neighbor_mean_y", pr_mean.astype(np.float32)),
+        pl.Series("neighbor_std_y", pr_std.astype(np.float32)),
+        pl.Series("neighbor_n_regions", pr_n),
+    ]
+    for k in range(K):
+        new_train_cols.append(
+            pl.Series(f"region_emb_{k}", tr_emb[:, k].astype(np.float32))
+        )
+        new_pred_cols.append(
+            pl.Series(f"region_emb_{k}", pr_emb[:, k].astype(np.float32))
+        )
+
+    X_train = X_train.with_columns(new_train_cols)
+    X_pred = X_pred.with_columns(new_pred_cols)
+    return X_train, X_pred
+
+
+def add_target_cross_features(
+    X_train, X_pred, y_train, target_col="PERCENT_PROFICIENT"
+):
+    """
+    Leak-safe cross-row target aggregations.
+    y_train: polars DF or Series with target. Aligned by row order with X_train.
+    """
+    # attach y to a working copy of X_train
+    if isinstance(y_train, pl.DataFrame):
+        y_series = (
+            y_train[target_col]
+            if target_col in y_train.columns
+            else y_train.to_series()
+        )
+    else:
+        y_series = y_train
+
+    Xt = X_train.with_columns(y_series.alias("__y"))
+    global_mean = Xt.select(pl.col("__y").mean()).item()
+
+    # ---- TRAIN: LOO features ----
+    Xt = (
+        Xt.with_columns(
+            _sa_sum=pl.col("__y").sum().over(["SCHOOL", "ASSESSMENT_NAME"]),
+            _sa_n=pl.len().over(["SCHOOL", "ASSESSMENT_NAME"]),
+            _s_sum=pl.col("__y").sum().over("SCHOOL"),
+            _s_n=pl.len().over("SCHOOL"),
+        )
+        .with_columns(
+            siblings_mean_y=pl.when(pl.col("_sa_n") > 1)
+            .then((pl.col("_sa_sum") - pl.col("__y")) / (pl.col("_sa_n") - 1))
+            .otherwise(None),
+            siblings_n=(pl.col("_sa_n") - 1).cast(pl.Int32),
+            school_loo_mean_y=pl.when(pl.col("_s_n") > 1)
+            .then((pl.col("_s_sum") - pl.col("__y")) / (pl.col("_s_n") - 1))
+            .otherwise(None),
+            school_loo_n=(pl.col("_s_n") - 1).cast(pl.Int32),
+            school_std_y=pl.col("__y").std().over("SCHOOL").fill_null(0.0),
+            siblings_std_y=pl.col("__y")
+            .std()
+            .over(["SCHOOL", "ASSESSMENT_NAME"])
+            .fill_null(0.0),
+        )
+        .drop(["_sa_sum", "_sa_n", "_s_sum", "_s_n"])
+    )
+
+    # All Students y as feature (masked when self IS All Students)
+    all_students_lookup = (
+        Xt.filter(pl.col("SUBGROUP_NAME") == "All Students")
+        .group_by(["SCHOOL", "ASSESSMENT_NAME"])
+        .agg(pl.col("__y").first().alias("all_students_y"))
+    )
+    Xt = Xt.join(all_students_lookup, on=["SCHOOL", "ASSESSMENT_NAME"], how="left")
+    Xt = Xt.with_columns(
+        all_students_y=pl.when(pl.col("SUBGROUP_NAME") == "All Students")
+        .then(None)
+        .otherwise(pl.col("all_students_y"))
+    )
+
+    # Fallback hierarchy
+    Xt = Xt.with_columns(
+        siblings_mean_y=pl.col("siblings_mean_y")
+        .fill_null(pl.col("school_loo_mean_y"))
+        .fill_null(global_mean),
+        school_loo_mean_y=pl.col("school_loo_mean_y").fill_null(global_mean),
+    ).with_columns(
+        all_students_y=pl.col("all_students_y").fill_null(pl.col("siblings_mean_y")),
+    )
+
+    # drop helper, return clean train
+    X_train_out = Xt.drop("__y")
+
+    # ---- TEST: full train aggs ----
+    sa_agg = Xt.group_by(["SCHOOL", "ASSESSMENT_NAME"]).agg(
+        pl.col("__y").mean().alias("siblings_mean_y"),
+        pl.col("__y").std().fill_null(0.0).alias("siblings_std_y"),
+        pl.len().alias("siblings_n"),
+    )
+    school_agg = Xt.group_by("SCHOOL").agg(
+        pl.col("__y").mean().alias("school_loo_mean_y"),
+        pl.col("__y").std().fill_null(0.0).alias("school_std_y"),
+        pl.len().alias("school_loo_n"),
+    )
+
+    X_pred_out = (
+        X_pred.join(sa_agg, on=["SCHOOL", "ASSESSMENT_NAME"], how="left")
+        .join(school_agg, on="SCHOOL", how="left")
+        .join(all_students_lookup, on=["SCHOOL", "ASSESSMENT_NAME"], how="left")
+    )
+
+    X_pred_out = X_pred_out.with_columns(
+        siblings_mean_y=pl.col("siblings_mean_y")
+        .fill_null(pl.col("school_loo_mean_y"))
+        .fill_null(global_mean),
+        school_loo_mean_y=pl.col("school_loo_mean_y").fill_null(global_mean),
+    ).with_columns(
+        all_students_y=pl.col("all_students_y").fill_null(pl.col("siblings_mean_y")),
+    )
+
+    return X_train_out, X_pred_out
+
+
+def cross_county_dtype(df):
+    return df.with_columns(
+        (
+            pl.col("COUNTY").cast(pl.Utf8)
+            + "_x_"
+            + pl.col("DISTRICT_TYPE").cast(pl.Utf8)
+        ).alias("COUNTY_x_DTYPE")
+    )
+
+
+def cross_county_assessment(df):
+    return df.with_columns(
+        (
+            pl.col("COUNTY").cast(pl.Utf8)
+            + "_x_"
+            + pl.col("ASSESSMENT_NAME").cast(pl.Utf8)
+        ).alias("COUNTY_x_ASSESSMENT_NAME")
+    )
+
+
+def cross_dtype_assessment(df):
+    return df.with_columns(
+        (
+            pl.col("DISTRICT_TYPE").cast(pl.Utf8)
+            + "_x_"
+            + pl.col("ASSESSMENT_NAME").cast(pl.Utf8)
+        ).alias("DISTRICT_TYPE_x_ASSESSMENT_NAME")
+    )
+
+
+def cross_dtype_subgroup(df):
+    return df.with_columns(
+        (
+            pl.col("DISTRICT_TYPE").cast(pl.Utf8)
+            + "_x_"
+            + pl.col("SUBGROUP_NAME").cast(pl.Utf8)
+        ).alias("DISTRICT_TYPE_x_SUBGROUP_NAME")
+    )
+
+
+def cross_dtype_region(df):
+    return df.with_columns(
+        (
+            pl.col("DISTRICT_TYPE").cast(pl.Utf8)
+            + "_x_"
+            + pl.col("REGION").cast(pl.Utf8)
+        ).alias("DISTRICT_TYPE_x_REGION")
+    )
+
+
+def cross_assessment_subgroup(df):
+    return df.with_columns(
+        (
+            pl.col("ASSESSMENT_NAME").cast(pl.Utf8)
+            + "_x_"
+            + pl.col("SUBGROUP_NAME").cast(pl.Utf8)
+        ).alias("ASSESSMENT_NAME_x_SUBGROUP_NAME")
+    )
 
 
 def df_district_type_level_gb(df, col_to_use, new_col_name):
@@ -1551,6 +1880,22 @@ def get_data(cached=True):
         inverse_region_type_share=1 - pl.col("region_share_of_state_pupils")
     )
 
+    X_train = cross_county_dtype(X_train)
+    X_train = cross_county_assessment(X_train)
+    X_train = cross_dtype_assessment(X_train)
+    X_train = cross_dtype_subgroup(X_train)
+    X_train = cross_assessment_subgroup(X_train)
+    X_train = cross_dtype_region(X_train)
+
+    X_pred = cross_county_dtype(X_pred)
+    X_pred = cross_county_assessment(X_pred)
+    X_pred = cross_dtype_assessment(X_pred)
+    X_pred = cross_dtype_subgroup(X_pred)
+    X_pred = cross_assessment_subgroup(X_pred)
+    X_pred = cross_dtype_region(X_pred)
+
+    X_train, X_pred = add_geo_graph_features(X_train, X_pred, y_train)
+    X_train, X_pred = add_target_cross_features(X_train, X_pred, y_train)
     if cached:
         X_pred.write_parquet("X_pred.parquet")
         X_train.write_parquet("X_train.parquet")

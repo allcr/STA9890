@@ -19,6 +19,13 @@ Caching: per-fold val/test predictions are cached to disk keyed by
 (tier, name, fold, params_hash). Re-running stack with unchanged params is
 near-instant; only experts whose params changed get refit.
 
+Cache schema v2 (self-validating):
+    val_preds, pred_preds          — per-fold predictions in original units
+    val_idx, pred_idx              — row indices into train/pred (no kfold replay needed)
+    params_hash, params_json       — for verification at load time
+    val_rmse, best_iter            — diagnostics
+    cache_version=2                — schema marker
+
 Modes:
     --mode tune --tier {global,macro,region,district_type,county,assessment,subgroup} [--name NAME]
     --mode stack [--force]
@@ -46,6 +53,8 @@ np.random.seed(SEED)
 random.seed(SEED)
 pl.enable_string_cache()
 
+LOGS_DIR = Path("logs")
+LOGS_DIR.mkdir(exist_ok=True)
 PARAMS_DIR = Path("best_params_lightgbm")
 PARAMS_DIR.mkdir(exist_ok=True)
 WARMSTART_DIR = Path("warmstart_markers_lightgbm")
@@ -54,6 +63,8 @@ EXPERTS_DIR = Path("fitted_experts_lightgbm")
 EXPERTS_DIR.mkdir(exist_ok=True)
 ARTIFACTS_PATH = Path("lightgbm_moe_artifacts.npz")
 GLOBAL_SUBMISSION_PATH = Path("submission_lightgbm_global.csv")
+
+CACHE_VERSION = 2
 
 
 # Warm-start configurations
@@ -73,6 +84,7 @@ LGB_LIBRARY_DEFAULTS = {
     "path_smooth": 0.0,
     "feature_fraction_bynode": 1.0,
     "max_bin": 255,
+    "min_data_per_group": 100,
 }
 
 LGB_GLOBAL_ONLY_WARMSTARTS = [
@@ -91,6 +103,7 @@ LGB_GLOBAL_ONLY_WARMSTARTS = [
         "path_smooth": 95.79829622244954,
         "feature_fraction_bynode": 0.9760300688941463,
         "max_bin": 113,
+        "min_data_per_group": 100,
     },
 ]
 
@@ -105,9 +118,9 @@ def _adapt_universal_warmstart(tier, n_rows):
 
 N_OUTER_FOLDS = 10
 NUM_BOOST_ROUND = 100_000
-EARLY_STOPPING_ROUNDS = 500
+EARLY_STOPPING_ROUNDS = 1000
 TUNING_NUM_BOOST_ROUND = 2500
-TUNING_EARLY_STOPPING = 50
+TUNING_EARLY_STOPPING = 100
 
 
 # Data loading
@@ -130,6 +143,12 @@ categorical_cols = [
     "REGION",
     "MACRO_REGION",
     "school_type",
+    "COUNTY_x_DTYPE",
+    "COUNTY_x_ASSESSMENT_NAME",
+    "DISTRICT_TYPE_x_ASSESSMENT_NAME",
+    "DISTRICT_TYPE_x_SUBGROUP_NAME",
+    "ASSESSMENT_NAME_x_SUBGROUP_NAME",
+    "DISTRICT_TYPE_x_REGION",
 ]
 numeric_cols_orig = [c for c in X_train.columns if c not in categorical_cols]
 cat_cols_ordered = [c for c in X_train.columns if c in set(categorical_cols)]
@@ -243,13 +262,14 @@ def search_space_for_tier(tier, trial, n_rows):
             "feature_fraction_bynode", 0.3, 1.0
         ),
         "max_bin": trial.suggest_int("max_bin", 63, 511),
+        "min_data_per_group": trial.suggest_int("min_data_per_group", 5, 200),
     }
 
 
 def n_trials_for_tier(tier, n_rows):
     if tier == "global":
-        return 50
-    return 15
+        return 5
+    return 50
 
 
 def n_inner_folds_for_tier(tier):
@@ -397,7 +417,7 @@ def tune_one(tier, name, n_trials=None):
 
     storage = optuna.storages.JournalStorage(
         optuna.storages.journal.JournalFileBackend(
-            f"./lightgbm_journal_{tier}_{_safe(name)}.log"
+            str(LOGS_DIR / f"lightgbm_journal_{tier}_{_safe(name)}.log")
         )
     )
     study = optuna.create_study(
@@ -405,7 +425,7 @@ def tune_one(tier, name, n_trials=None):
         direction="minimize",
         storage=storage,
         load_if_exists=True,
-        sampler=TPESampler(seed=SEED),
+        sampler=TPESampler(seed=SEED, n_startup_trials=5),
     )
 
     marker = WARMSTART_DIR / f"{tier}_{_safe(name)}.done"
@@ -440,10 +460,14 @@ def load_params(tier, name):
 
 
 # Per-fold expert fit (with prediction caching)
-# IMPORTANT: cache is keyed only by (tier, name, fold, params_hash). It will
+# IMPORTANT: cache is keyed by (tier, name, fold, params_hash). It will
 # NOT detect changes to: SEED, N_OUTER_FOLDS, the kfold stratification key,
 # or the underlying X_train.parquet. After such changes, delete EXPERTS_DIR
 # to force re-fitting:  rm -rf fitted_experts_lightgbm/
+#
+# Cache schema v2: stores val_idx + pred_idx + params_json + val_rmse + best_iter
+# alongside predictions. Self-validating — no kfold replay required for
+# downstream consumers (e.g., moe_submission).
 
 
 def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
@@ -460,11 +484,16 @@ def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
         cache_key = _params_hash(params)
         cache_path = _expert_cache_path(tier, name, fold_idx, cache_key)
         if cache_path.exists():
-            cached = np.load(cache_path)
-            print(
-                f"  [{tier}/{name}] fold {fold_idx} loaded from cache (hash {cache_key})"
-            )
-            return cached["val_preds"], cached["pred_preds"]
+            cached = np.load(cache_path, allow_pickle=False)
+            if (
+                "cache_version" in cached.files
+                and int(cached["cache_version"].item()) == CACHE_VERSION
+            ):
+                print(
+                    f"  [{tier}/{name}] fold {fold_idx} loaded from cache (hash {cache_key})"
+                )
+                return cached["val_preds"], cached["pred_preds"]
+            print(f"  [{tier}/{name}] fold {fold_idx} cache outdated schema, refitting")
 
     X_tr_pd = X_train_pd.iloc[train_idx]
     X_va_pd = X_train_pd.iloc[val_idx]
@@ -502,6 +531,8 @@ def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
     val_preds = model.predict(X_va_pd, num_iteration=best_iter)
     test_preds = model.predict(X_te_pd, num_iteration=best_iter)
 
+    val_rmse = float(np.sqrt(np.mean((y_va - val_preds) ** 2)))
+
     del model, dtrain, dval
 
     if fold_idx is not None:
@@ -509,9 +540,17 @@ def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
             cache_path,
             val_preds=val_preds,
             pred_preds=test_preds,
+            val_idx=np.asarray(val_idx, dtype=np.int64),
+            pred_idx=np.asarray(pred_idx, dtype=np.int64),
             params_hash=cache_key,
+            params_json=json.dumps(params),
+            val_rmse=np.float64(val_rmse),
+            best_iter=np.int64(best_iter),
+            cache_version=np.int64(CACHE_VERSION),
         )
-        print(f"  [{tier}/{name}] fold {fold_idx} cached (hash {cache_key})")
+        print(
+            f"  [{tier}/{name}] fold {fold_idx} cached (hash {cache_key}, val_rmse={val_rmse:.4f})"
+        )
 
     return val_preds, test_preds
 
@@ -789,7 +828,9 @@ def stack(force=False):
     print(f"\nSaved {ARTIFACTS_PATH}")
 
     # Diagnostics
-    diagnostic_path = Path("lightgbm_baseline_diagnostic.json")
+
+    version_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+    diagnostic_path = Path(f"lightgbm_baseline_diagnostic_{version_tag}.json")
     diagnostic = {
         "run_timestamp": datetime.now().isoformat(),
         "n_outer_folds": N_OUTER_FOLDS,

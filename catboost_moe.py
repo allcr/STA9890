@@ -1,7 +1,3 @@
-#!/usr/bin/env python3
-
-#!/usr/bin/env python3
-
 """
 CatBoost mixture-of-experts.
 
@@ -21,6 +17,13 @@ Modes:
     --mode stack [--force]              # default; runs with library defaults
     --mode tune --enable-tune --tier T  # explicit opt-in for tuning
     --mode submit-global [--force]
+
+Cache schema v2 (self-validating):
+    val_preds, pred_preds          — per-fold predictions in original units
+    val_idx, pred_idx              — row indices into train/pred
+    params_hash, params_json       — for verification at load time
+    val_rmse, best_iter            — diagnostics
+    cache_version=2                — schema marker
 
 Safety features matching ResNet/LightGBM/FT-Transformer MoE:
   - Per-fold prediction caching keyed by (tier, name, fold, params_hash)
@@ -52,6 +55,8 @@ np.random.seed(SEED)
 random.seed(SEED)
 pl.enable_string_cache()
 
+LOGS_DIR = Path("logs")
+LOGS_DIR.mkdir(exist_ok=True)
 PARAMS_DIR = Path("best_params_catboost")
 PARAMS_DIR.mkdir(exist_ok=True)
 WARMSTART_DIR = Path("warmstart_markers_catboost")
@@ -61,14 +66,17 @@ EXPERTS_DIR.mkdir(exist_ok=True)
 ARTIFACTS_PATH = Path("catboost_moe_artifacts.npz")
 GLOBAL_SUBMISSION_PATH = Path("submission_catboost_global.csv")
 
+CACHE_VERSION = 2
 
+ITERATIONS_GLOBAL = 30_000  # capped, too many categories make catboost unhappy
+ITERATIONS_PARTITION = 200_000
 # ── Default params ────────────────────────────────────────────────────────────
 
 # These are the library defaults plus a few opinionated tweaks (longer
 # training with early stopping, GPU when available). The whole point of
 # this file is that these are the "tuned" params for our purposes.
 CATBOOST_DEFAULTS = {
-    "iterations": 100000,  # i'm only running this once so get as much out of it as possible
+    "iterations": ITERATIONS_PARTITION,  # i'm only running this once so get as much out of it as possible, there is a feature cap in catboost that this can bump into
     "learning_rate": 0.03,
     "depth": 6,
     "l2_leaf_reg": 3.0,
@@ -123,6 +131,12 @@ categorical_cols = [
     "REGION",
     "MACRO_REGION",
     "school_type",
+    "COUNTY_x_DTYPE",
+    "COUNTY_x_ASSESSMENT_NAME",
+    "DISTRICT_TYPE_x_ASSESSMENT_NAME",
+    "DISTRICT_TYPE_x_SUBGROUP_NAME",
+    "ASSESSMENT_NAME_x_SUBGROUP_NAME",
+    "DISTRICT_TYPE_x_REGION",
 ]
 numeric_cols = [c for c in X_train.columns if c not in categorical_cols]
 cat_cols_ordered = [c for c in X_train.columns if c in set(categorical_cols)]
@@ -274,7 +288,7 @@ def search_space_for_tier(tier, trial, n_rows):
 
 
 def n_trials_for_tier(tier, n_rows):
-    return 20 if tier == "global" else 8
+    return 5 if tier == "global" else 30
 
 
 def maybe_save_best(tier, name, study, tolerance=1e-6):
@@ -345,8 +359,6 @@ def tune_one(tier, name, n_trials=None):
 
             model = CatBoostRegressor(
                 **{**CATBOOST_DEFAULTS, **params},
-                iterations=TUNING_ITERATIONS,
-                early_stopping_rounds=TUNING_EARLY_STOPPING,
                 task_type=CATBOOST_TASK_TYPE,
                 verbose=0,
             )
@@ -365,7 +377,7 @@ def tune_one(tier, name, n_trials=None):
 
     storage = optuna.storages.JournalStorage(
         optuna.storages.journal.JournalFileBackend(
-            f"./catboost_journal_{tier}_{_safe(name)}.log"
+            str(LOGS_DIR / f"catboost_journal_{tier}_{_safe(name)}.log")
         )
     )
     study = optuna.create_study(
@@ -411,9 +423,14 @@ def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
         cache_key = _params_hash(params)
         cache_path = _expert_cache_path(tier, name, fold_idx, cache_key)
         if cache_path.exists():
-            cached = np.load(cache_path)
-            print(f"  [{tier}/{name}] fold {fold_idx} cached (hash {cache_key})")
-            return cached["val_preds"], cached["pred_preds"]
+            cached = np.load(cache_path, allow_pickle=False)
+            if (
+                "cache_version" in cached.files
+                and int(cached["cache_version"].item()) == CACHE_VERSION
+            ):
+                print(f"  [{tier}/{name}] fold {fold_idx} cached (hash {cache_key})")
+                return cached["val_preds"], cached["pred_preds"]
+            print(f"  [{tier}/{name}] fold {fold_idx} cache outdated schema, refitting")
 
     X_tr = X_train_pd.iloc[train_idx]
     X_va = X_train_pd.iloc[val_idx]
@@ -428,12 +445,18 @@ def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
     # Merge tuned params (if any) over defaults
     full_params = {**CATBOOST_DEFAULTS, **params, "task_type": CATBOOST_TASK_TYPE}
 
+    full_params["iterations"] = (
+        ITERATIONS_GLOBAL if tier == "global" else ITERATIONS_PARTITION
+    )
     model = CatBoostRegressor(**full_params)
     model.fit(train_pool, eval_set=val_pool, use_best_model=True)
-    print(f"    [{tier}/{name}] best_iteration: {model.get_best_iteration()}")
+    best_iter = int(model.get_best_iteration())
+    print(f"    [{tier}/{name}] best_iteration: {best_iter}")
 
     val_preds = model.predict(val_pool)
     pred_preds = model.predict(test_pool)
+
+    val_rmse = float(np.sqrt(np.mean((y_va - val_preds) ** 2)))
 
     del model, train_pool, val_pool, test_pool
 
@@ -442,9 +465,17 @@ def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
             cache_path,
             val_preds=val_preds,
             pred_preds=pred_preds,
+            val_idx=np.asarray(val_idx, dtype=np.int64),
+            pred_idx=np.asarray(pred_idx, dtype=np.int64),
             params_hash=cache_key,
+            params_json=json.dumps(params, default=str),
+            val_rmse=np.float64(val_rmse),
+            best_iter=np.int64(best_iter),
+            cache_version=np.int64(CACHE_VERSION),
         )
-        print(f"  [{tier}/{name}] fold {fold_idx} cached (hash {cache_key})")
+        print(
+            f"  [{tier}/{name}] fold {fold_idx} cached (hash {cache_key}, val_rmse={val_rmse:.4f})"
+        )
 
     return val_preds, pred_preds
 
@@ -723,7 +754,8 @@ def stack(force=False):
 
 
 def _save_diagnostics(tiers, oof_global, resid, keys, test_stack_arrays, version_tag):
-    diagnostic_path = Path("catboost_diagnostic.json")
+    version_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+    diagnostic_path = Path(f"catboost_diagnostic_{version_tag}.json")
     diagnostic = {
         "run_timestamp": datetime.datetime.now().isoformat(),
         "n_outer_folds": N_OUTER_FOLDS,

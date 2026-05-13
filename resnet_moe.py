@@ -22,6 +22,15 @@ Modes:
     --mode tune --tier {global,macro,region,district_type,assessment,subgroup} [--name NAME]
     --mode stack [--force]
     --mode submit-global [--force]
+
+Cache schema v2 (per-fold expert npz files):
+    val_preds, pred_preds          — predictions in original units
+    val_idx, pred_idx              — row indices into train/pred arrays
+    params_hash, params_json       — for verification at load time
+    val_rmse, best_epoch           — diagnostics
+    cache_version=2                — schema marker
+
+Logs and Optuna journal storage are written to ./logs/ (created if absent).
 """
 
 from sklearn.model_selection import StratifiedKFold
@@ -44,6 +53,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import OrdinalEncoder, PowerTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
+
+from sklearn.linear_model import RidgeCV
 import datetime
 import hashlib
 
@@ -70,6 +81,11 @@ GLOBAL_SUBMISSION_PATH = Path("submission_resnet_global.csv")
 
 EXPERTS_DIR = Path("fitted_experts_resnet")
 EXPERTS_DIR.mkdir(exist_ok=True)
+
+LOGS_DIR = Path("logs")
+LOGS_DIR.mkdir(exist_ok=True)
+
+CACHE_VERSION = 2
 
 
 def _load_global_best_as_warmstart():
@@ -166,7 +182,7 @@ def _adapt_universal_warmstart(tier):
 
 N_OUTER_FOLDS = 10
 EPOCHS = 3500
-PATIENCE = 500
+PATIENCE = 600
 EPOCHS_TUNING = 300
 PATIENCE_TUNING = 25
 
@@ -190,6 +206,12 @@ categorical_cols = [
     "REGION",
     "MACRO_REGION",
     "school_type",
+    "COUNTY_x_DTYPE",
+    "COUNTY_x_ASSESSMENT_NAME",
+    "DISTRICT_TYPE_x_ASSESSMENT_NAME",
+    "DISTRICT_TYPE_x_SUBGROUP_NAME",
+    "ASSESSMENT_NAME_x_SUBGROUP_NAME",
+    "DISTRICT_TYPE_x_REGION",
 ]
 numeric_cols = [c for c in X_train.columns if c not in categorical_cols]
 cat_cols_ordered = [c for c in X_train.columns if c in set(categorical_cols)]
@@ -388,11 +410,12 @@ def train_one_fold(
     fold_label="",
     verbose=True,
 ):
-    """Trains in normalized space; early-stops on RMSE in original units."""
+    """Returns (best_rmse, best_epoch). best_rmse is in original target units."""
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
     best_rmse = float("inf")
     best_state = None
+    best_epoch = 0
     bad_epochs = 0
 
     for epoch in range(epochs):
@@ -427,6 +450,7 @@ def train_one_fold(
         if val_rmse < best_rmse - 1e-6:
             best_rmse = val_rmse
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            best_epoch = epoch
             bad_epochs = 0
         else:
             bad_epochs += 1
@@ -440,7 +464,7 @@ def train_one_fold(
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    return best_rmse
+    return best_rmse, best_epoch
 
 
 @torch.no_grad()
@@ -510,9 +534,7 @@ def search_space_for_tier(tier, trial):
 
 
 def n_trials_for_tier(tier, n_rows):
-    if tier == "global":
-        return 25
-    return 10
+    return 25
 
 
 def n_inner_folds_for_tier(tier):
@@ -641,7 +663,7 @@ def tune_one(tier, name, n_trials=None):
                 X_va_num, X_va_cat, y_va_n, params["batch_size"], shuffle=False
             )
 
-            train_one_fold(
+            _, _ = train_one_fold(
                 model,
                 tr_loader,
                 va_loader,
@@ -681,13 +703,13 @@ def tune_one(tier, name, n_trials=None):
     if tier == "global":
         storage = optuna.storages.JournalStorage(
             optuna.storages.journal.JournalFileBackend(
-                "./tabresnet_journal_storage.log"
+                str(LOGS_DIR / "tabresnet_journal_storage.log")
             )
         )
     else:
         storage = optuna.storages.JournalStorage(
             optuna.storages.journal.JournalFileBackend(
-                f"./resnet_journal_{tier}_{_safe(name)}.log"
+                str(LOGS_DIR / f"resnet_journal_{tier}_{_safe(name)}.log")
             )
         )
     study = optuna.create_study(
@@ -695,7 +717,7 @@ def tune_one(tier, name, n_trials=None):
         direction="minimize",
         storage=storage,
         load_if_exists=True,
-        sampler=TPESampler(seed=SEED),
+        sampler=TPESampler(seed=SEED, n_startup_trials=5),
     )
 
     marker = WARMSTART_DIR / f"{tier}_{_safe(name)}.done"
@@ -739,9 +761,16 @@ def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
         cache_key = _params_hash(params)
         cache_path = _expert_cache_path(tier, name, fold_idx, cache_key)
         if cache_path.exists():
-            cached = np.load(cache_path)
-            print(f"  [{tier}/{name}] cached fold {fold_idx} (hash {cache_key})")
-            return cached["val_preds"], cached["pred_preds"]
+            cached = np.load(cache_path, allow_pickle=False)
+            if (
+                "cache_version" in cached.files
+                and int(cached["cache_version"].item()) == CACHE_VERSION
+            ):
+                print(
+                    f"  [{tier}/{name}] fold {fold_idx} loaded from cache (hash {cache_key})"
+                )
+                return cached["val_preds"], cached["pred_preds"]
+            print(f"  [{tier}/{name}] fold {fold_idx} cache outdated schema, refitting")
 
     X_tr_num_raw = num_train_raw[train_idx]
     X_va_num_raw = num_train_raw[val_idx]
@@ -782,7 +811,7 @@ def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
         X_va_num, X_va_cat, y_va_n, params["batch_size"], shuffle=False
     )
 
-    train_one_fold(
+    _, best_epoch = train_one_fold(
         model,
         tr_loader,
         va_loader,
@@ -797,7 +826,38 @@ def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
     )
 
     val_preds = predict(model, X_va_num, X_va_cat, DEVICE, y_mean, y_std)
+    # >>> ROCM BUG CHECK <
+    import torch.nn.functional as F
+
+    y_va_n_check = ((y_va - y_mean) / y_std).astype(np.float32)
+    va_loader_check = make_loader(
+        X_va_num, X_va_cat, y_va_n_check, params["batch_size"], shuffle=False
+    )
+    model.eval()
+    pn, tn = [], []
+    with torch.no_grad():
+        for xn, xc, yy in va_loader_check:
+            pn.append(model(xn.to(DEVICE), xc.to(DEVICE)).cpu())
+            tn.append(yy)
+    val_rmse_intrain_path = (
+        float(torch.sqrt(F.mse_loss(torch.cat(pn).view(-1), torch.cat(tn).view(-1))))
+        * y_std
+    )
+    val_rmse_predict_path = float(np.sqrt(np.mean((y_va - val_preds) ** 2)))
+    corr = float(np.corrcoef(y_va, val_preds)[0, 1])
+    sorted_rmse = float(np.sqrt(np.mean((np.sort(y_va) - np.sort(val_preds)) ** 2)))
+    print(
+        f"  ROCM CHECK [{tier}/{name}] fold {fold_idx}: "
+        f"intrain_path={val_rmse_intrain_path:.4f}  "
+        f"predict_path={val_rmse_predict_path:.4f}  "
+        f"sorted={sorted_rmse:.4f}  "
+        f"corr={corr:.4f}",
+        flush=True,
+    )
+    # >>> END <
     pred_preds = predict(model, X_te_num, X_te_cat, DEVICE, y_mean, y_std)
+
+    val_rmse = float(np.sqrt(np.mean((y_va - val_preds) ** 2)))
 
     del model, tr_loader, va_loader
     torch.cuda.empty_cache()
@@ -808,7 +868,16 @@ def fit_one_expert(tier, name, train_idx, val_idx, pred_idx, fold_idx=None):
             cache_path,
             val_preds=val_preds,
             pred_preds=pred_preds,
+            val_idx=np.asarray(val_idx, dtype=np.int64),
+            pred_idx=np.asarray(pred_idx, dtype=np.int64),
             params_hash=cache_key,
+            params_json=json.dumps(params),
+            val_rmse=np.float64(val_rmse),
+            best_epoch=np.int64(best_epoch),
+            cache_version=np.int64(CACHE_VERSION),
+        )
+        print(
+            f"  [{tier}/{name}] fold {fold_idx} cached (hash {cache_key}, val_rmse={val_rmse:.4f}, best_epoch={best_epoch})"
         )
 
     return val_preds, pred_preds
@@ -882,9 +951,9 @@ def _save_diagnostics(
       - oof_stack + test_stack saved as npz
       - JSON summary of everything above
     """
-    from sklearn.linear_model import RidgeCV
 
-    diagnostic_path = Path("baseline_diagnostic.json")
+    version_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+    diagnostic_path = Path(f"baseline_diagnostic_resnet_{version_tag}.json")
     diagnostic = {
         "run_timestamp": datetime.datetime.now().isoformat(),
         "n_outer_folds": N_OUTER_FOLDS,
@@ -1326,9 +1395,6 @@ def stack(force=False):
             a, b = keys[i], keys[j]
             corr = np.corrcoef(resid[a], resid[b])[0, 1]
             print(f"  {a:14s} <-> {b:14s}: {corr:.4f}")
-
-    version_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    _save_diagnostics(...)
 
     version_tag = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     _save_diagnostics(

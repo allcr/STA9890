@@ -46,12 +46,14 @@ VERSION_TAG = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 # ── Load artifacts ────────────────────────────────────────────────────────────
-catboost_art = np.load("catboost_moe_artifacts.npz)")
+catboost_art = np.load("catboost_moe_artifacts.npz")
 resnet = np.load("resnet_moe_artifacts.npz")
 lgb_art = np.load("lightgbm_moe_artifacts.npz")
 ft = np.load("ft_transformer_moe_artifacts.npz")
-assert np.array_equal(
-    resnet["y"], lgb_art["y"], ft["y"], catboost["y"]
+assert (
+    np.array_equal(resnet["y"], lgb_art["y"])
+    and np.array_equal(resnet["y"], ft["y"])
+    and np.array_equal(resnet["y"], catboost_art["y"])
 ), "y arrays differ between artifacts — outer fold seeds must match"
 y = resnet["y"]
 
