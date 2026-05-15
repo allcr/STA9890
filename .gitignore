@@ -41,7 +41,8 @@ aocl-linux-aocc-5.2.0/
 
 # Tuned params explicitly tracked
 *.json
-!best_params_*/*.json
+best_params_*/*.json
+*.npz
 
 # IDE / editor caches
 .ruff_cache/
