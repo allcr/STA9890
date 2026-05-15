@@ -17,6 +17,7 @@ wheels/
 *.csv
 *.parquet
 *.gz
+*.json
 
 # Logs
 *.log
