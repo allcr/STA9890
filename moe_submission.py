@@ -77,12 +77,12 @@ oof_stack = np.column_stack(
         lgb_art["oof_assessment"],
         ft["oof_global"],
         catboost_art["oof_global"],
-        catboost_art["oof_macro"],
-        catboost_art["oof_region"],
-        catboost_art["oof_district_type"],
-        catboost_art["oof_county"],
+        #     catboost_art["oof_macro"],
+        #     catboost_art["oof_region"],
+        #     catboost_art["oof_district_type"],
+        #     catboost_art["oof_county"],
         catboost_art["oof_group"],
-        catboost_art["oof_assessment"],
+        #    catboost_art["oof_assessment"],
     ]
 )
 test_stack = np.column_stack(
@@ -102,12 +102,12 @@ test_stack = np.column_stack(
         lgb_art["test_assessment"],
         ft["test_global"],
         catboost_art["test_global"],
-        catboost_art["test_macro"],
-        catboost_art["test_region"],
-        catboost_art["test_district_type"],
-        catboost_art["test_county"],
+        #  catboost_art["test_macro"],
+        #  catboost_art["test_region"],
+        #  catboost_art["test_district_type"],
+        #  catboost_art["test_county"],
         catboost_art["test_group"],
-        catboost_art["test_assessment"],
+        #  catboost_art["test_assessment"],
     ]
 )
 column_names = [
@@ -126,12 +126,12 @@ column_names = [
     "lgb_assessment",
     "ft_global",
     "cb_global",
-    "cb_macro",
-    "cb_region",
-    "cb_district_type",
-    "cb_county",
+    # "cb_macro",
+    # "cb_region",
+    # "cb_district_type",
+    # "cb_county",
     "cb_group",
-    "cb_assessment",
+    # "cb_assessment",
 ]
 assert oof_stack.shape[1] == len(column_names), (
     f"column_names length {len(column_names)} != "

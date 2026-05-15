@@ -34,7 +34,7 @@ debug.log
 warmstart_markers_*/
 catboost_info/
 fitted_experts_*/
-
+logs/*
 # aock
 aocl-linux-aocc-5.2.0/
 

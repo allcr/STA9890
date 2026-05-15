@@ -78,9 +78,19 @@ PATIENCE = 6
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
-X_train = pl.read_parquet("X_train.parquet").drop("ASSESSMENT_ID")
+X_train = (
+    pl.read_parquet("X_train.parquet")
+    .drop("ASSESSMENT_ID")
+    .drop("all_students_y")
+    .drop("estimated_se")
+)
 y_train = pl.read_parquet("y_train.parquet")
-X_pred = pl.read_parquet("X_pred.parquet").drop("ASSESSMENT_ID")
+X_pred = (
+    pl.read_parquet("X_pred.parquet")
+    .drop("ASSESSMENT_ID")
+    .drop("all_students_y")
+    .drop("estimated_se")
+)
 X_pred_id = pl.read_parquet("X_pred_id.parquet")
 
 y_np = y_train.to_numpy().ravel().astype(np.float32)

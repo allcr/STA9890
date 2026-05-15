@@ -43,10 +43,10 @@ from pathlib import Path
 
 import numpy as np
 import optuna
-from optuna.samplers import TPESampler
-from optuna.pruners import MedianPruner
 import polars as pl
 from catboost import CatBoostRegressor, Pool
+from optuna.pruners import MedianPruner
+from optuna.samplers import TPESampler
 from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
@@ -66,7 +66,7 @@ GLOBAL_SUBMISSION_PATH = Path("submission_catboost_global.csv")
 
 CACHE_VERSION = 2
 
-ITERATIONS_GLOBAL = 30_000  # capped, too many categories make catboost unhappy
+ITERATIONS_GLOBAL = 40_000  # capped, too many categories make catboost unhappy
 ITERATIONS_PARTITION = 200_000
 # ── Default params ────────────────────────────────────────────────────────────
 
@@ -86,7 +86,6 @@ CATBOOST_DEFAULTS = {
     "eval_metric": "RMSE",
     "early_stopping_rounds": 200,
     "random_seed": SEED,
-    "verbose": 500,
 }
 
 
@@ -112,9 +111,19 @@ TUNING_EARLY_STOPPING = 50
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
-X_train = pl.read_parquet("X_train.parquet").drop("ASSESSMENT_ID")
+X_train = (
+    pl.read_parquet("X_train.parquet")
+    .drop("ASSESSMENT_ID")
+    .drop("all_students_y")
+    .drop("estimated_se")
+)
 y_train = pl.read_parquet("y_train.parquet")
-X_pred = pl.read_parquet("X_pred.parquet").drop("ASSESSMENT_ID")
+X_pred = (
+    pl.read_parquet("X_pred.parquet")
+    .drop("ASSESSMENT_ID")
+    .drop("all_students_y")
+    .drop("estimated_se")
+)
 X_pred_id = pl.read_parquet("X_pred_id.parquet")
 
 y_np = y_train.to_numpy().ravel().astype(np.float32)
@@ -286,7 +295,7 @@ def search_space_for_tier(tier, trial, n_rows):
 
 
 def n_trials_for_tier(tier, n_rows):
-    return 5 if tier == "global" else 30
+    return 5 if tier == "global" else 20
 
 
 def maybe_save_best(tier, name, study, tolerance=1e-6):
@@ -358,7 +367,7 @@ def tune_one(tier, name, n_trials=None):
             model = CatBoostRegressor(
                 **{**CATBOOST_DEFAULTS, **params},
                 task_type=CATBOOST_TASK_TYPE,
-                verbose=0,
+                verbose=500,
             )
             model.fit(train_pool, eval_set=val_pool, use_best_model=True)
             preds = model.predict(val_pool)
@@ -597,81 +606,81 @@ def stack(force=False):
         oof_global[val_idx] = val_preds
         test_global += test_preds / N_OUTER_FOLDS
 
-        run_partition_tier(
-            "macro",
-            UNIQUE_MACROS,
-            macro_train,
-            macro_pred,
-            train_idx,
-            val_idx,
-            oof_macro,
-            test_macro,
-            filled_macro_tr,
-            filled_macro_te,
-            oof_global,
-            test_global,
-            fold_idx,
-        )
-        run_partition_tier(
-            "region",
-            UNIQUE_REGIONS,
-            region_train,
-            region_pred,
-            train_idx,
-            val_idx,
-            oof_region,
-            test_region,
-            filled_region_tr,
-            filled_region_te,
-            oof_global,
-            test_global,
-            fold_idx,
-        )
-        run_partition_tier(
-            "district_type",
-            UNIQUE_DTYPES,
-            dtype_train,
-            dtype_pred,
-            train_idx,
-            val_idx,
-            oof_dtype,
-            test_dtype,
-            filled_dtype_tr,
-            filled_dtype_te,
-            oof_global,
-            test_global,
-            fold_idx,
-        )
-        run_partition_tier(
-            "county",
-            UNIQUE_COUNTIES,
-            county_train,
-            county_pred,
-            train_idx,
-            val_idx,
-            oof_county,
-            test_county,
-            filled_county_tr,
-            filled_county_te,
-            oof_global,
-            test_global,
-            fold_idx,
-        )
-        run_partition_tier(
-            "assessment",
-            UNIQUE_ASSESSMENTS,
-            assessment_train,
-            assessment_pred,
-            train_idx,
-            val_idx,
-            oof_assessment,
-            test_assessment,
-            filled_assessment_tr,
-            filled_assessment_te,
-            oof_global,
-            test_global,
-            fold_idx,
-        )
+        # run_partition_tier(
+        #     "macro",
+        #     UNIQUE_MACROS,
+        #     macro_train,
+        #     macro_pred,
+        #     train_idx,
+        #     val_idx,
+        #     oof_macro,
+        #     test_macro,
+        #     filled_macro_tr,
+        #     filled_macro_te,
+        #     oof_global,
+        #     test_global,
+        #     fold_idx,
+        # )
+        # run_partition_tier(
+        #     "region",
+        #     UNIQUE_REGIONS,
+        #     region_train,
+        #     region_pred,
+        #     train_idx,
+        #     val_idx,
+        #     oof_region,
+        #     test_region,
+        #     filled_region_tr,
+        #     filled_region_te,
+        #     oof_global,
+        #     test_global,
+        #     fold_idx,
+        # )
+        # run_partition_tier(
+        #     "district_type",
+        #     UNIQUE_DTYPES,
+        #     dtype_train,
+        #     dtype_pred,
+        #     train_idx,
+        #     val_idx,
+        #     oof_dtype,
+        #     test_dtype,
+        #     filled_dtype_tr,
+        #     filled_dtype_te,
+        #     oof_global,
+        #     test_global,
+        #     fold_idx,
+        # )
+        # # run_partition_tier(
+        # #     "county",
+        # #     UNIQUE_COUNTIES,
+        # #     county_train,
+        # #     county_pred,
+        # #     train_idx,
+        # #     val_idx,
+        # #     oof_county,
+        # #     test_county,
+        # #     filled_county_tr,
+        # #     filled_county_te,
+        # #     oof_global,
+        # #     test_global,
+        # #     fold_idx,
+        # # )
+        # # run_partition_tier(
+        # #     "assessment",
+        # #     UNIQUE_ASSESSMENTS,
+        # #     assessment_train,
+        # #     assessment_pred,
+        # #     train_idx,
+        # #     val_idx,
+        # #     oof_assessment,
+        # #     test_assessment,
+        # #     filled_assessment_tr,
+        # #     filled_assessment_te,
+        # #     oof_global,
+        # #     test_global,
+        # #     fold_idx,
+        # # )
         run_partition_tier(
             "subgroup",
             UNIQUE_GROUPS,
@@ -697,12 +706,12 @@ def stack(force=False):
 
     tiers = [
         ("global", oof_global),
-        ("macro", oof_macro),
-        ("region", oof_region),
-        ("district_type", oof_dtype),
-        ("county", oof_county),
+        # ("macro", oof_macro),
+        # ("region", oof_region),
+        # ("district_type", oof_dtype),
+        # ("county", oof_county),
         ("subgroup", oof_group),
-        ("assessment", oof_assessment),
+        # ("assessment", oof_assessment),
     ]
     resid = {name: y_np - oof for name, oof in tiers}
     keys = list(resid.keys())
@@ -721,19 +730,19 @@ def stack(force=False):
     np.savez_compressed(
         ARTIFACTS_PATH,
         oof_global=oof_global,
-        oof_macro=oof_macro,
-        oof_region=oof_region,
-        oof_district_type=oof_dtype,
-        oof_county=oof_county,
+        # oof_macro=oof_macro,
+        # oof_region=oof_region,
+        # oof_district_type=oof_dtype,
+        # oof_county=oof_county,
         oof_group=oof_group,
-        oof_assessment=oof_assessment,
+        # oof_assessment=oof_assessment,
         test_global=test_global,
-        test_macro=test_macro,
-        test_region=test_region,
-        test_district_type=test_dtype,
-        test_county=test_county,
+        # test_macro=test_macro,
+        # test_region=test_region,
+        # test_district_type=test_dtype,
+        # test_county=test_county,
         test_group=test_group,
-        test_assessment=test_assessment,
+        # test_assessment=test_assessment,
         y=y_np,
     )
     print(f"\nSaved {ARTIFACTS_PATH}")
@@ -746,12 +755,12 @@ def stack(force=False):
         keys=keys,
         test_stack_arrays=[
             test_global,
-            test_macro,
-            test_region,
-            test_dtype,
-            test_county,
+            #   test_macro,
+            #   test_region,
+            #   test_dtype,
+            #   test_county,
             test_group,
-            test_assessment,
+            #  test_assessment,
         ],
         version_tag=version_tag,
     )
@@ -782,10 +791,11 @@ def _save_diagnostics(tiers, oof_global, resid, keys, test_stack_arrays, version
 
     partition_breakdowns = {}
     for tier_name, oof_arr, membership in [
-        ("macro", dict(tiers)["macro"], macro_train),
-        ("region", dict(tiers)["region"], region_train),
-        ("district_type", dict(tiers)["district_type"], dtype_train),
-        ("county", dict(tiers)["county"], county_train),
+        ("subgroup", dict(tiers)["group"], subgroup_train),
+        # ("macro", dict(tiers)["macro"], macro_train),
+        #       ("region", dict(tiers)["region"], region_train),
+        #      ("district_type", dict(tiers)["district_type"], dtype_train),
+        #      ("county", dict(tiers)["county"], county_train),
     ]:
         partition_breakdowns[tier_name] = {}
         for partition_name in np.unique(membership):

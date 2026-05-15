@@ -126,9 +126,19 @@ TUNING_EARLY_STOPPING = 100
 
 # Data loading
 
-X_train = pl.read_parquet("X_train.parquet").drop("ASSESSMENT_ID")
+X_train = (
+    pl.read_parquet("X_train.parquet")
+    .drop("ASSESSMENT_ID")
+    .drop("all_students_y")
+    .drop("estimated_se")
+)
 y_train = pl.read_parquet("y_train.parquet")
-X_pred = pl.read_parquet("X_pred.parquet").drop("ASSESSMENT_ID")
+X_pred = (
+    pl.read_parquet("X_pred.parquet")
+    .drop("ASSESSMENT_ID")
+    .drop("all_students_y")
+    .drop("estimated_se")
+)
 X_pred_id = pl.read_parquet("X_pred_id.parquet")
 
 y_np = y_train.to_numpy().ravel().astype(np.float32)
@@ -272,7 +282,7 @@ def search_space_for_tier(tier, trial, n_rows):
 def n_trials_for_tier(tier, n_rows):
     if tier == "global":
         return 5
-    return 50
+    return 25
 
 
 def n_inner_folds_for_tier(tier):
